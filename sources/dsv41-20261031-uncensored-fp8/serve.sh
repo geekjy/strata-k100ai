@@ -1,14 +1,23 @@
 set +e
+# Serve DeepSeek-V4.1-Flash through serve/server.py (OpenAI + Anthropic endpoints) on port 8095.
+# DS4_AR_RS2=1: with two GPUs the engine takes the reduce-scatter all-reduce instead of the slower
+# put + poll + sum path - measured +22% decode on 2x Hygon K100_AI (patches/0004).
 source /opt/dtk/env.sh 2>/dev/null
 export LD_LIBRARY_PATH=/usr/local/hyhal/lib:/opt/hyhal/lib:$LD_LIBRARY_PATH
 cd /4T-02/strata-work/strata || exit 1
 
+echo "=== stop the old container ==="
+docker stop -t 60 dsv41-serve >/dev/null 2>&1
+for i in $(seq 1 30); do docker ps --format '{{.Names}}' | grep -qx dsv41-serve || break; sleep 2; done
+docker rm -f dsv41-serve >/dev/null 2>&1
+sleep 2
+
 echo "=== start the OpenAI/Anthropic server over the dsv41 engine ==="
-docker rm -f dsv41-serve 2>/dev/null | head -1
 docker run -d --name dsv41-serve --privileged \
   --device /dev/kfd --device /dev/dri \
   -v /usr/local/hyhal:/usr/local/hyhal:ro -v /opt/hyhal:/opt/hyhal:ro \
   -v /4T-02:/4T-02 -p 8095:8095 \
+  -e DS4_AR_RS2=1 \
   -w /4T-02/strata-work/strata \
   --entrypoint bash dcu-qwen3-5:perfect-0.0.1 -lc '
     source /opt/dtk/env.sh 2>/dev/null

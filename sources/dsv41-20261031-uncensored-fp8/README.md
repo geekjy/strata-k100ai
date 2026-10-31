@@ -301,6 +301,28 @@ print(c.chat.completions.create(model="DeepSeek-V4.1-Flash-1017",
 
 **注意**：服务默认**没有鉴权**（`/health` 里 `"api_key": false`），而且 `/v1/models` 报 `"images": true`（pack 里带了视觉塔，`GENI` 可传图）。放到局域网上用建议加 `--api-key <key>`（或环境变量 `STRATA_API_KEY`），否则同网段任何人都能用。
 
+### 双卡的 all-reduce：2 卡也走 reduce-scatter（`DS4_AR_RS2=1`，+22%）
+
+TP2 时每层有**两次**跨卡归约（注意力输出、专家输出），即 80 次/token。`ds4_kernels.cu` 的 `allreduce()` 里 reduce-scatter 只在 `a.nm > 2` 时启用，2 卡只能走"put + 轮询 flag + 求和"三步——每次 ~2.5 ms。
+
+`patches/0004` 把门槛改成 `(nm > 2 || (nm == 2 && DS4_AR_RS2))`：reduce-scatter 的内核本身对 nm 是通用的（按 nm 切片、`threadIdx.x < nm` 等待），2 卡同样成立。默认路径逐字节不变，只有 `DS4_AR_RS2=1` 才启用。
+
+测量（24 token，`--gpus 0,1`，两轮正反顺序，同一会话内交替）：
+
+| 顺序 | 配置 | decode | `down + post` |
+|---|---|---|---|
+| base → rs2 | base | 5.74 tok/s | 113.46 ms |
+| | **rs2** | **7.01 tok/s** | **84.66 ms** |
+| rs2 → base | **rs2** | **6.73 tok/s** | **91.32 ms** |
+| | base | 5.48 tok/s | 123.62 ms |
+
+**+22~23% decode，`down + post` 少约 30 ms/token**，反序复测一致。
+
+顺带两个阴性/对照结论：
+
+- `DS4_AR_F16=1`（归约用 FP16，字节减半）**没有效果**（98.59 → 100.07 ms），说明这块是**延迟受限**而不是带宽受限，与上游注释"no gain on 4x R9700"一致；
+- **单卡**（`--gpus 0`）没有归约（`nm == 1`，`down + post` 只有 3.61 ms），但只能装 2417 个专家，CPU 通道要等 140 ms/token，总体仍是 4.29 tok/s，比双卡的 5.26 慢——所以双卡 + reduce-scatter 是当前最优组合。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。

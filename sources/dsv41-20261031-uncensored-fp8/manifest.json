@@ -55,6 +55,13 @@
       "what": "调试用：route_publish_kernel 内 13 个进度槽 + 2 个计数器，写进 mapped 主机内存并由 2 ms 看门狗落盘",
       "why": "launch 探针只给出内核名、给不出内核里走到哪；进程被 VM fault 杀掉后只有落盘的文件能留下进度",
       "warning": "不要进发布构建：每个标记一次 __threadfence_system()，外加一个 2 ms 的写盘线程"
+    },
+    {
+      "file": "patches/0004-allreduce-rs2.patch",
+      "sha256": "996b2aeab8a338a7b9147c651843f9a8e2e4f5d734e0f094af52cd8ac460de98",
+      "bytes": 1202,
+      "what": "allreduce(): 让 2 个成员也能走 reduce-scatter（默认路径不变，仅 DS4_AR_RS2=1 时启用）",
+      "why": "TP2 每层两次跨卡归约，2 卡原本被迫走 put + 轮询 + 求和（每次 ~2.5 ms）；reduce-scatter 内核本身对 nm 通用"
     }
   ],
   "model_dir_addition": {
@@ -203,6 +210,14 @@
       "models": "data[0].id = DeepSeek-V4.1-Flash-1017 (FP8 checkpoint, MXFP4 experts, MXFP8 engram), n_ctx 32768",
       "chat": "POST /v1/chat/completions -> 200 in 8.9 s, finish_reason stop, content 法国首都是巴黎。, usage 40/31/71",
       "note": "默认无鉴权（api_key false）；放到局域网上要加 --api-key 或 STRATA_API_KEY"
+    },
+    "multi_gpu": {
+      "setting": "2x Hygon K100_AI, --gpus 0,1, 24 tokens, DS4_PROF=1, 正反两轮顺序",
+      "base": "5.74 / 5.48 tok/s, down + post 113.46 / 123.62 ms",
+      "rs2": "7.01 / 6.73 tok/s, down + post 84.66 / 91.32 ms",
+      "gain": "+22~23% decode, 约 -30 ms/token",
+      "negative_DS4_AR_F16": "FP16 归约无效（98.59 vs 100.07 ms）—— 延迟受限，不是带宽受限",
+      "single_gpu": "nm==1 无归约（down+post 3.61 ms）但只能装 2417 个专家，CPU 通道 140 ms/token，总体 4.29 tok/s，慢于双卡 5.26"
     }
   },
   "clean_rebuild_verified": false,
