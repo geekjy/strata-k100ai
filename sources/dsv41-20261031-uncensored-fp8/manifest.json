@@ -40,6 +40,14 @@
       "what": "调试用：DS4_PRELOG 打印每次 launch（file:line/grid/block），DS4_LAUNCH_CHECK 在查错前先同步",
       "why": "设备故障会让进程直接死掉、不设 hipGetLastError，否则无法定位是哪个内核",
       "warning": "不要进发布构建：每次 launch 都会同步并打印"
+    },
+    {
+      "file": "patches/0003-ds4-stage-markers.patch",
+      "sha256": "6a236c95a11b0088ba8a7b14ab082fe3f56933d6ec3efdde90e855f5f34b831a",
+      "bytes": 7434,
+      "what": "调试用：route_publish_kernel 内 13 个进度槽 + 2 个计数器，写进 mapped 主机内存并由 2 ms 看门狗落盘",
+      "why": "launch 探针只给出内核名、给不出内核里走到哪；进程被 VM fault 杀掉后只有落盘的文件能留下进度",
+      "warning": "不要进发布构建：每个标记一次 __threadfence_system()，外加一个 2 ms 的写盘线程"
     }
   ],
   "model_dir_addition": {
@@ -135,13 +143,20 @@
       "negative_results": [
         "DS4_NO_REQ_X=1（只关掉 req->x 的 5120-float 批量主机写）仍然崩在同一个内核 —— 不是那次主机写",
         "--vision off 也仍然崩在同一个内核 —— 不是视觉路由偏置 bias_vl"
-      ]
+      ],
+      "stage_markers": {
+        "patch": "patches/0003-ds4-stage-markers.patch",
+        "slots": "0 entered, 1 preload done, 2 after barrier, 3 top-k round r, 4 in winner block, 5 winner written, 6 top-k loop finished, 7 denominator done, 8 before pick r writes, 9 idx/w/plan_ptr done, 10 req->ids/w written, 11 on_cpu set, 12 after last barrier; 14 started, 15 finished",
+        "observed": "markers 0..12 = [1,1,1,6,6,6,1,1,1,6,1,1,1]; started=2, finished=1",
+        "conclusion": "第 1 次调用完整跑完；第 2 次调用死在 logits/bias 预载段（槽 3 仍是上一轮的 6）。内核本身没问题，问题在第二次调用拿到的缓冲",
+        "pack_check": "layers.N.ffn.gate.bias 与 bias_vl 都是 1536 B（384 float），偏移连续 —— 不是缺张量或长度不对"
+      }
     }
   },
   "clean_rebuild_verified": false,
   "known_issues": [
     "磁盘上的 DSV41-UNC-v3.gguf 用旧的 Engram 块顺序（[32 codes][scale]）生成，必须用本目录修正后的补丁重新生成，或对两个 Engram 张量就地做 33 字节块内旋转，否则输出是噪声",
-    "第一次前向触发 GPU VMFault；带同步的探针把最后一次在飞的 launch 定位到 route_publish_kernel（ds4_kernels.cu:2129），未修",
+    "第一次前向触发 GPU VMFault。launch 探针定位到 route_publish_kernel，内核内标记进一步显示：第 1 次调用完整跑完，第 2 次调用死在 logits/bias 预载段。内核本身没问题，坏的是第二次调用拿到的缓冲，未修",
     "DS4_LAUNCH_CHECK / HIP_LAUNCH_BLOCKING=1 单用都抓不到该故障：运行库不通过 hipGetLastError 上报，需要在查错前同步（见 patches/0002）"
   ],
   "not_verified": [

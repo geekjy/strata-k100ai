@@ -1,0 +1,145 @@
+src/dsv41/ds4_kernels.cu: in-kernel stage markers for route_publish_kernel (K100AI, DEBUG ONLY).
+
+The launch probe (patches/0002) named route_publish_kernel as the launch in flight when the
+process dies, but not how far the kernel got.  This adds 13 progress slots plus two counters:
+
+   0 entered            5 winner written        10 req->ids / req->w written
+   1 preload done       6 top-k loop finished   11 on_cpu set
+   2 after barrier      7 denominator done      12 after the last barrier
+   3 top-k round r      8 before pick r writes  14 invocations started
+   4 in winner block    9 idx/w/plan_ptr done   15 invocations finished
+
+The slots live in host-mapped memory (cudaHostAlloc(Mapped), which the DCU can be written by the
+GPU - verified with a micro-test) and a host thread copies them to
+/4T-02/strata-work/ds4_markers.bin every 2 ms.  A VM fault kills the process, the file survives.
+
+The patch also carries the DS4_NO_REQ_X switch (the req->x bulk host write), which the negative
+experiment needed; it defaults to on, i.e. unchanged behaviour.
+
+Do not ship: a fence per marker and a 2 ms writer thread.
+
+diff --git a/src/dsv41/ds4_kernels.cu b/src/dsv41/ds4_kernels.cu
+--- a/src/dsv41/ds4_kernels.cu
++++ b/src/dsv41/ds4_kernels.cu
+@@ -4,6 +4,10 @@
+ // angles, the softmaxes and the roundings follow the reference's F32 arithmetic.  A window's token is blockIdx.y.
+ #include "ds4_launch.h"   // strata_ds4_launch: <<<>>> on CUDA and HIP, a dispatch on Metal
+ #include "ds4_kernels.cuh"
++#include <thread>      // K100AI markers: the host watchdog thread
++#include <chrono>
++#include <cstdio>
++#include <cstring>
+ #if defined(STRATA_METAL)
+ #include <ds4_metal_host.h>
+ #endif
+@@ -1587,13 +1591,19 @@
+                                                             float route_scale, const unsigned long long* __restrict__ vram,
+                                                             const float* __restrict__ x, int dim, int* idx, float* w,
+                                                             unsigned long long* plan_ptr, Req* req,
+-                                                            const float* __restrict__ bias_vl, unsigned vl) {
++                                                            const float* __restrict__ bias_vl, unsigned vl, int req_x_on, int* mk) {
++    // K100AI markers: host-visible progress, so a fault that kills the process still says how far it got
++    auto mark = [&](int slot, int v) {
++        if (mk != nullptr && threadIdx.x == 0) { mk[slot] = v; __threadfence_system(); }
++    };
+     __shared__ float sc[1024], bs[1024];
+     __shared__ float bv[32];
+     __shared__ int bi[32];
+     __shared__ int pick[16];
+     __shared__ int on_cpu;
+     const int t = blockIdx.x;
++    mark(0, 1);                       // entered
++    if (mk != nullptr && threadIdx.x == 0) mk[14] += 1;   // how many invocations started
+     logits += (size_t) t * 1024;
+     if (bias_vl != nullptr && ((vl >> t) & 1u)) bias = bias_vl;
+     for (int i = threadIdx.x; i < n; i += blockDim.x) {
+@@ -1602,13 +1612,16 @@
+         sc[i] = sqrtf(sp);
+         bs[i] = sc[i] + bias[i];
+     }
++    mark(1, 1);                       // logits/bias preload done
+     __syncthreads();
++    mark(2, 1);                       // after the barrier
+     const int lane = threadIdx.x & 31, wp = threadIdx.x >> 5;
+     for (int r = 0; r < k; ++r) {
+         float best = -FLT_MAX;
+         int bix = 0x7fffffff;
+         for (int i = threadIdx.x; i < n; i += blockDim.x)
+             if (bs[i] > best || (bs[i] == best && i < bix)) best = bs[i], bix = i;
++        mark(3, r + 1);               // top-k round r: local scan done
+         for (int o = 16; o > 0; o >>= 1) {
+             const float ov = __shfl_xor_sync(0xffffffffu, best, o);
+             const int oi = __shfl_xor_sync(0xffffffffu, bix, o);
+@@ -1621,33 +1634,43 @@
+             int ix = 0x7fffffff;
+             for (int q = 0; q < (int) (blockDim.x >> 5); ++q)
+                 if (bv[q] > b || (bv[q] == b && bi[q] < ix)) b = bv[q], ix = bi[q];
++            mark(4, r + 1);           // inside the winner block
+             pick[r] = ix;
+             bs[ix] = -FLT_MAX;
++            mark(5, r + 1);           // winner written
+         }
+         __syncthreads();
+     }
++    mark(6, 1);                       // top-k loop finished
+     if (threadIdx.x == 0) {
+         float s = 0.0f;
+         for (int r = 0; r < k; ++r) s += sc[pick[r]];
++        mark(7, 1);                   // weights' denominator
+         int cpu = 0;
+         for (int r = 0; r < k; ++r) {
+             const float wv = sc[pick[r]] / (s + 1e-20f) * route_scale;
++            mark(8, r + 1);           // before this pick's writes
+             idx[(size_t) t * kPicks + r] = pick[r];
+             w[(size_t) t * kPicks + r] = wv;
+             plan_ptr[(size_t) t * kPicks + r] = vram[pick[r]];
++            mark(9, r + 1);           // idx/w/plan_ptr written for this pick
+             cpu |= vram[pick[r]] == 0ull;
+             if (req != nullptr) {
+                 req->ids[t][r] = pick[r];
+                 req->w[t][r] = wv;
+             }
+         }
++        mark(10, 1);              // req->ids / req->w written
+         on_cpu = cpu;
++        mark(11, 1);              // on_cpu set
+     }
+     // the token's FFN input to the host only where the CPU lane reads it (a pick of its on the CPU lane): each row
+     // 20 KB over PCIe, where most windows have none
+     __syncthreads();
+-    if (req != nullptr && on_cpu)
++    mark(12, 1);                      // after the last barrier
++    if (req != nullptr && on_cpu && req_x_on)
+         for (int i = threadIdx.x; i < dim; i += blockDim.x) req->x[t][i] = x[(size_t) t * dim + i];
++    if (mk != nullptr && threadIdx.x == 0) mk[15] += 1;   // how many invocations finished
+ }
+ 
+ // a later layer's m likely picks (route_kernel's choice from its logits) into req->ahead[t][off ..)
+@@ -2125,8 +2148,26 @@
+         return;
+     }
+ #endif
++    static const int req_x_on = std::getenv("DS4_NO_REQ_X") == nullptr;   // K100AI probe
++    // K100AI markers: a mapped host buffer the kernel writes progress into, and a thread that keeps a copy
++    // on disk every 2 ms - the process dies with a VM fault, the file does not.
++    static int* mk = []() -> int* {
++        if (std::getenv("DS4_MARKERS") == nullptr) return nullptr;
++        void* p = nullptr;
++        if (cudaHostAlloc(&p, 4096, cudaHostAllocMapped | cudaHostAllocPortable) != cudaSuccess) return nullptr;
++        std::memset(p, 0, 4096);
++        int* q = (int*) p;
++        std::thread([q] {
++            for (;;) {
++                std::FILE* f = std::fopen("/4T-02/strata-work/ds4_markers.bin", "wb");
++                if (f != nullptr) { std::fwrite(q, 4, 64, f); std::fclose(f); }
++                std::this_thread::sleep_for(std::chrono::milliseconds(2));
++            }
++        }).detach();
++        return q;
++    }();
+     strata_ds4_launch(route_publish_kernel, T, 512, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
+-                                           vl != 0 ? bias_vl : nullptr, vl);
++                                           vl != 0 ? bias_vl : nullptr, vl, req_x_on, mk);
+     if (req != nullptr) strata_ds4_launch(publish_kernel, 1, 1, 0, s, req, T, seq, na0, na1);
+ }
+ void route_ahead(const float* logits, const float* bias, int n, int m, int T, Req* req, int off, cudaStream_t s) {

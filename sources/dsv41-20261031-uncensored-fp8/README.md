@@ -164,6 +164,24 @@ write via host ptr      : no error value=42
 
 > 说明：这一轮的实验代码（`DS4_NO_REQ_X`）是在 `/work/strata` 工作树上直接改的，没有做成补丁入库——它是阴性结论的临时手段；需要复现时按上面两句改即可。
 
+### 内核内阶段标记：第一次调用完好，第二次调用在预载段死掉（2026-11-01 04:20）
+
+`patches/0003-ds4-stage-markers.patch`（同样**仅调试用**）把 13 个进度槽 + 2 个计数器写进一块 `cudaHostAlloc(Mapped)` 的主机内存（前面微测试已证明 DCU 的 GPU 能写它），并由一个 2 ms 的看门狗线程落到 `/4T-02/strata-work/ds4_markers.bin`——进程被 VM fault 杀掉，文件还在。
+
+结果（`--window 1 --n 4`，DS4_MARKERS=1）：
+
+```
+markers 0..12: [1, 1, 1, 6, 6, 6, 1, 1, 1, 6, 1, 1, 1]
+invocations started (14): 2     finished (15): 1
+```
+
+- 槽 0–12 全部到达终值（`6` = 6 个专家都处理完），**第 1 次调用完整跑完**（finished=1）；
+- **第 2 次调用 started=2 但没 finished**，而槽 3（top-k 第一轮）还停着上一轮的 6 → 它**死在 logits/bias 预载那一段**，连第一轮 top-k 都没进。
+
+这条结论把方向从"wave64 内核算错"改成了"**第二次调用拿到的缓冲有问题**"：`route_publish_kernel` 本身第一次运行是完好的。已核对 pack：`layers.N.ffn.gate.bias` 与 `bias_vl` 都是 1536 B（384 float）、偏移连续，不是缺张量或长度不对。
+
+下一步：在预载循环里加一个 `atomicMax` 槽位记录跨线程处理到的最大 `i`（区分"死在 i=0"还是"死在 i 中间"），并同时打印第二次调用传入的 `logits`/`bias` 指针值，确认是哪一个坏。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。
