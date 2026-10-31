@@ -1,0 +1,115 @@
+--- a/src/dsv41/ds4_model.cu
++++ b/src/dsv41/ds4_model.cu
+@@ -12,6 +12,14 @@
+ //   moe(x): 6 of 384 routed experts (sqrt-softplus scores, biased top-k) + the shared expert
+ //   h = post * moe + comb^T h;  pre = f_pre
+ // and after the last layer logits = head(rmsnorm(sum_s pre[s] h[s])).
++// K100AI (gfx928): the wave64/compat backend exposes the hipMemcpy2D spellings, not the CUDA ones.
++#if defined(STRATA_USE_HIP)
++#define strata_memcpy2d hipMemcpy2D
++#define strata_memcpy2d_async hipMemcpy2DAsync
++#else
++#define strata_memcpy2d cudaMemcpy2D
++#define strata_memcpy2d_async cudaMemcpy2DAsync
++#endif
+ #include "ds4_launch.h"   // strata_ds4_launch: <<<>>> on CUDA and HIP, a dispatch on Metal
+ #include "ds4_model.hpp"
+ #include "ds4_pick_rule.hpp"
+@@ -3596,7 +3604,7 @@
+                 for (int r = 0; r < 2; ++r)
+                     ok = ok && cudaMemcpyAsync(dst + l.hlay.trellis[r], mat_r(r) + (size_t) m * ffh * gr,
+                                                (size_t) ffh * gr, cudaMemcpyHostToDevice, cs) == cudaSuccess;
+-                ok = ok && cudaMemcpy2DAsync(dst + l.hlay.trellis[2], dh, mat_r(2) + (size_t) m * dh, dr, dh,
++                ok = ok && strata_memcpy2d_async(dst + l.hlay.trellis[2], dh, mat_r(2) + (size_t) m * dh, dr, dh,
+                                              (size_t) g.dim, cudaMemcpyHostToDevice, cs) == cudaSuccess;
+             }
+             if (!ok) err = "streaming layer " + std::to_string(l.il) + " expert " + std::to_string(e) + " failed";
+@@ -3605,7 +3613,7 @@
+         const auto& parts = l.hh[(size_t) e];
+         const int D = g.dim, FF = g.ff;
+         auto cp2 = [&](uint8_t* d0, size_t dp, const uint8_t* s0, size_t sp, size_t w, size_t h) {
+-            return cudaMemcpy2DAsync(d0, dp, s0, sp, w, h, cudaMemcpyHostToDevice, cs) == cudaSuccess;
++            return strata_memcpy2d_async(d0, dp, s0, sp, w, h, cudaMemcpyHostToDevice, cs) == cudaSuccess;
+         };
+         auto cp = [&](uint8_t* d0, const uint8_t* s0, size_t n) {
+             return cudaMemcpyAsync(d0, s0, n, cudaMemcpyHostToDevice, cs) == cudaSuccess;
+@@ -4104,7 +4112,7 @@
+             if (l.nm > 1) {   // (the down's part: in each of its rows the member's blocks)
+                 const int t2 = gg::expert_type(l.lay, 2);
+                 const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
+-                CK(cudaMemcpy2DAsync(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
++                CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
+                                      cudaMemcpyHostToDevice, c.cs));
+             } else
+                 CK(cudaMemcpyAsync(dst + lay.trellis[2], it.src[2], mx_part_bytes(l, 2), cudaMemcpyHostToDevice, c.cs));
+@@ -8386,7 +8394,7 @@
+             std::vector<float> gl((size_t) T * l.n_exp), gb((size_t) l.n_exp);
+             CK(cudaMemcpy(ri.data(), c.ridx, np * 4, cudaMemcpyDeviceToHost));
+             CK(cudaMemcpy(rt.data(), c.row_tok, nk * 4, cudaMemcpyDeviceToHost));
+-            CK(cudaMemcpy2D(gl.data(), (size_t) l.n_exp * 4, c.glog, 1024 * 4, (size_t) l.n_exp * 4, (size_t) T,
++            CK(strata_memcpy2d(gl.data(), (size_t) l.n_exp * 4, c.glog, 1024 * 4, (size_t) l.n_exp * 4, (size_t) T,
+                             cudaMemcpyDeviceToHost));
+             CK(cudaMemcpy(gb.data(), l.gate_bias, gb.size() * 4, cudaMemcpyDeviceToHost));
+             std::lock_guard<std::mutex> lk(dump_mu);
+@@ -8408,7 +8416,7 @@
+                 strata_ds4_launch(pred_proj_k, T, 256, 0, s, c.x, (int) D, dp);
+                 std::vector<float> hp((size_t) T * 256), hl((size_t) T * l.n_exp);
+                 CK(cudaMemcpyAsync(hp.data(), dp, hp.size() * 4, cudaMemcpyDeviceToHost, s));
+-                CK(cudaMemcpy2DAsync(hl.data(), (size_t) l.n_exp * 4, c.glog, 1024 * 4, (size_t) l.n_exp * 4, (size_t) T,
++                CK(strata_memcpy2d_async(hl.data(), (size_t) l.n_exp * 4, c.glog, 1024 * 4, (size_t) l.n_exp * 4, (size_t) T,
+                                      cudaMemcpyDeviceToHost, s));
+                 CK(cudaStreamSynchronize(s));
+                 CK(cudaFree(dp));
+@@ -8646,7 +8654,7 @@
+                         const int nr = std::min(T, tap_cap);
+                         hc_mean(c.h + (size_t) (T - nr) * H * D, nr, H, D, d.tap, D, s);
+                         CK(cudaStreamWaitEvent(s, ev_seed, 0));
+-                        CK(cudaMemcpy2DAsync(h_taps + j * D, nt * D * 4, d.tap, (size_t) D * 4, (size_t) D * 4,
++                        CK(strata_memcpy2d_async(h_taps + j * D, nt * D * 4, d.tap, (size_t) D * 4, (size_t) D * 4,
+                                              (size_t) nr, cudaMemcpyDeviceToHost, s));
+                     }
+                 }
+@@ -8845,7 +8853,7 @@
+                         const int nr = std::min(T, tap_cap);
+                         hc_mean(c.h + (size_t) (T - nr) * H * D, nr, H, D, d.tap, D, s);
+                         CK(cudaStreamWaitEvent(s, ev_seed, 0));
+-                        CK(cudaMemcpy2DAsync(h_taps + j * D, nt * D * 4, d.tap, (size_t) D * 4, (size_t) D * 4,
++                        CK(strata_memcpy2d_async(h_taps + j * D, nt * D * 4, d.tap, (size_t) D * 4, (size_t) D * 4,
+                                              (size_t) nr, cudaMemcpyDeviceToHost, s));
+                     }
+                 }
+@@ -9657,7 +9665,7 @@
+             x.dst[0] = d.logits_part;
+             x.bytes[0] = (size_t) rows * mn * 4;
+             xfer_get(x, flag(m), seq, d.st);
+-            CK(cudaMemcpy2DAsync(d.logits + (size_t) m0, (size_t) V * 4, d.logits_part, (size_t) mn * 4,
++            CK(strata_memcpy2d_async(d.logits + (size_t) m0, (size_t) V * 4, d.logits_part, (size_t) mn * 4,
+                                  (size_t) mn * 4, (size_t) rows, cudaMemcpyDeviceToDevice, d.st));
+         }
+         set_flag(G.lg_ack + (size_t) slot * 32, seq, d.st);
+@@ -9685,7 +9693,7 @@
+         cudaSetDevice(d.id);
+         hc_mean(d.h, T, g.hc, D, d.tap, D, d.st);
+         CK(cudaStreamWaitEvent(d.st, ev_seed, 0));
+-        CK(cudaMemcpy2DAsync(h_taps + j * D, nt * D * 4, d.tap, (size_t) D * 4, (size_t) D * 4, (size_t) T,
++        CK(strata_memcpy2d_async(h_taps + j * D, nt * D * 4, d.tap, (size_t) D * 4, (size_t) D * 4, (size_t) T,
+                              cudaMemcpyDeviceToHost, d.st));
+         return true;
+     }
+--- a/src/dsv41/ds4_vision.cu
++++ b/src/dsv41/ds4_vision.cu
+@@ -183,7 +183,13 @@
+ int cdiv(int a, int b) { return (a + b - 1) / b; }
+ 
+ // y[r][o] = alpha * sum_k x[r][k] W[o][k] (row-major W [out][in] with row stride ldw, x [rows][ldx], y [rows][ldy])
+-bool gemm(cublasHandle_t h, const uint16_t* W, int ldw, const uint16_t* x, int ldx, void* y, cudaDataType yt, int ldy,
++#if defined(STRATA_USE_HIP)
++using strata_blas_dtype = hipDataType;   // K100AI: hipBLAS names the element type hipDataType
++#else
++using strata_blas_dtype = cudaDataType;
++#endif
++
++bool gemm(cublasHandle_t h, const uint16_t* W, int ldw, const uint16_t* x, int ldx, void* y, strata_blas_dtype yt, int ldy,
+           int rows, int in, int out, float alpha, std::string& err) {
+     const float beta = 0.0f;
+     VB(cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, out, rows, in, &alpha, W, CUDA_R_16BF, ldw, x, CUDA_R_16BF, ldx, &beta,

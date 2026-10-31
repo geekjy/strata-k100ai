@@ -1,5 +1,14 @@
 # 更新记录
 
+## 2026-10-31 源码快照：DeepSeek-V4.1-Flash 引擎在 K100AI 上编译打通（main，未打新标签）
+
+- 新增 [sources/dsv41-20261031-gfx928](sources/dsv41-20261031-gfx928/)：把上游的 DeepSeek-V4.1-Flash 引擎 `strata-dsv41` 移植到 **wave64（gfx906 兼容）后端**的 5 个补丁、构建脚本、逐文件 SHA-256 与验证数据。上游原状是两条 HIP 后端互斥——wave32 后端拒绝 `gfx928`（`cmake/hip_backend.cmake:31`），wave64 后端又在 `CMakeLists.txt:910` 排除 `STRATA_BUILD_DSV41`——所以 DeepSeek 引擎此前在 K100AI 上根本无法开始编译。
+- 实测（容器 `dcu-qwen3-5:perfect-0.0.1`，DTK 26.04 / clang 17 / cmake 3.29，64 并发）：首轮 9 个文件 / **50 个错误**，终轮 **0 错误**；`NATIVE_EXPERTS=ON` 完整构建约 761 s，产出 `strata-dsv41` **23,413,800 B**（SHA-256 `6cc34877…`），`source /opt/dtk/env.sh` 后 `--version` 正常输出 `0.1.55`。
+- 数值门：上游的 H2 门 `ds4_iq_test`（设备 i-quant 专家内核 vs ggml 自身解码 + 双精度参考，不需要权重）在真卡 K100_AI 上 **`ALL OK`**，覆盖 IQ2_XS / IQ2_S / IQ3_XXS / IQ3_S / IQ4_XS / IQ1_M，设备路径与 CPU 通道同容差全过（token gate_up 最差 4.63e-08 / 容差 1e-5）。dsv41 的内核按 wave32 写，"wave64 上会不会静默算错"这一项由此被实测排除。
+- 记录一条运行环境要求：容器只挂 `renderD128` 或未挂宿主机 HyHAL 时卡被识别成 `KONGMING`、HIP 报 `no ROCm-capable device`；需要 `--privileged --device /dev/kfd --device /dev/dri` 加 `/usr/local/hyhal`、`/opt/hyhal` 只读挂载。
+- 边界（不声称已跑通）：未下载权重（官方 2.00bpw 需 138 GB + Engram 111 GB + DSpark 8 GB），未加载过模型，注意力/路由/超连接的整模型数值、真实专家规模下的显存分层、字节级可复现（`clean_rebuild_verified` 仍为 `false`）均未验证；`DS4_FAST_ATTN=1` 在 gfx928 上会 `__builtin_trap()`，不要开启。
+- 新增文档 [docs/DEEPSEEK_V41_K100AI.md](docs/DEEPSEEK_V41_K100AI.md)：包含上述实测数据、容器配方与后续步骤；同时记录 **GLM-5.3-Flash 目前没有任何引擎支持**的结论（`Glm5Next` 架构、两个 vLLM 镜像与 strata 均不认，需新写模型族），以及它与 DeepSeek V4.1 在稀疏注意力/超连接上的同源性。
+
 ## v0.2.1
 
 - **多模态视觉**：新增 HIP 图片编码器 `runtime/bin/strata-vision`（119,439,216 B，SHA-256 `9c4dc143…`），把 Qwen3.8-Flash-Next 的 ViT 放到 gfx928 GPU 上执行；文本引擎 `runtime/bin/strata` 与 v0.2.0 完全相同（`bdbfd934…`）。

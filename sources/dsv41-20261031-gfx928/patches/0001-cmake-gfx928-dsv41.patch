@@ -1,0 +1,85 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -817,8 +817,10 @@
+   # against llama.cpp on the SAME ids and a tokenizer on one side of that comparison is a second variable.
+   # plan v0.3 P5: batched prompt processing (tensor-core GEMMs through cuBLAS).
+   add_library(strata_prefill STATIC src/prefill/gemm.cu src/prefill/kernels.cu src/prefill/prefill.cpp)
+-  if(STRATA_ENABLE_HIP)
++  if(STRATA_ENABLE_HIP OR STRATA_HIP_GFX906)
+     # #313: the RDNA3 WMMA GEMMs include hip_runtime.h: AMD builds only (a CUDA build never sees this file)
++    # K100AI: on the gfx906/wave64 backend STRATA_WMMA_GFX11 is undefined, so this file compiles its
++    # fallback (every entry point returns false) and gemm() keeps using hipBLAS for the dense products.
+     target_sources(strata_prefill PRIVATE src/prefill/wmma_gemm.cu)
+   endif()
+   target_include_directories(strata_prefill PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories})
+@@ -907,7 +909,7 @@
+   # Its own executable for now (strata-dsv41); a family switch in `strata` comes after first light.  OFF by default: it
+   # changes no existing target (the vendored kernels live in strata::dsv41k, so no symbol is shared with strata_kernels).
+   option(STRATA_BUILD_DSV41 "Build the DeepSeek-V4.1 engine path (strata-dsv41)" OFF)
+-  if(STRATA_BUILD_DSV41 AND NOT STRATA_HIP_GFX906)
++  if(STRATA_BUILD_DSV41)   # K100AI: allow the wave64 (gfx928) build
+     add_library(strata_dsv41_kernels STATIC src/dsv41/vendor/exl3.cu src/dsv41/vendor/sampler.cu src/dsv41/vendor/moe_win.cu
+                 src/dsv41/vendor/exl3_cpu.cpp)
+     if(NOT STRATA_ENABLE_HIP)   # (the pre-sm_80 NVIDIA decode kernels exl3.cu dispatches to)
+@@ -935,6 +937,13 @@
+     # strata_prefill: the RDNA3 WMMA dense GEMM (src/prefill/wmma_gemm.cu), which gemm() prefers over hipBLAS on gfx11 (measured
+     # 4.97 -> 20-40 TFLOPS on this part: the chunked prompt's dense GEMM is 11.1 s of a 4K prompt at the library's rate)
+     target_link_libraries(strata-dsv41 PRIVATE strata_prefill strata_dsv41_kernels ${_strata_gpu_runtime_target} ${_strata_gpu_blas_target})
++    # K100AI (gfx928, wave64): the DeepSeek sources select their HIP path with STRATA_USE_HIP, which the
++    # gfx906 compatibility backend does not define for the Qwen tree (that tree was validated CUDA-shaped).
++    if(STRATA_HIP_GFX906)
++      foreach(_t strata_dsv41_kernels strata-dsv41)
++        target_compile_definitions(${_t} PRIVATE STRATA_USE_HIP=1)
++      endforeach()
++    endif()
+     find_package(Threads REQUIRED)
+     target_link_libraries(strata-dsv41 PRIVATE Threads::Threads)
+     if(WIN32 AND STRATA_ENABLE_HIP)   # cudaMemGetInfo is the DXGI-budgeted hip_compat::mem_get_info (src/core/device.cu): on a Strix Halo the
+@@ -956,7 +965,9 @@
+     if(STRATA_NATIVE_EXPERTS)
+       # the trellis experts (device kernels ds4_tq.cu, CPU lane ds4_tq_cpu.cpp) against a double reference; needs a GPU, no model
+       # both test .cpp files launch kernels, so they compile as HIP on the AMD backend and as CUDA on the NVIDIA one
+-      if(STRATA_ENABLE_HIP)
++      # K100AI: the gfx906 backend forces STRATA_ENABLE_CUDA ON (CUDA::cudart is a stand-in here), so ask the
++      # backend switch first - a CUDA language was never enabled in this build and the test would not generate.
++      if(STRATA_HIP_GFX906 OR STRATA_ENABLE_HIP)
+         set(_ds4_test_lang HIP)
+       elseif(STRATA_ENABLE_CUDA)
+         set(_ds4_test_lang CUDA)
+@@ -969,14 +980,14 @@
+       target_include_directories(ds4_tq_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories}
+                                  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/cpu)
+       target_link_libraries(ds4_tq_test PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target} Threads::Threads)
+-      target_compile_definitions(ds4_tq_test PRIVATE STRATA_DSV41_TQ_CPU=1)
++      target_compile_definitions(ds4_tq_test PRIVATE STRATA_DSV41_TQ_CPU=1 STRATA_USE_HIP=1)   # K100AI
+       # the same with the plain-FMA tile instead of the gfx12 WMMA one (what CUDA and gfx11 builds run)
+       add_executable(ds4_tq_test_portable tests/dsv41/tq_expert_test.cpp src/dsv41/ds4_tq.cu src/dsv41/ds4_iq.cu src/dsv41/ds4_tq_cpu.cpp
+                      src/dsv41/ds4_iq_cpu.cpp src/dsv41/ds4_gg_cpu.cpp tools/trellis/tqenc.cpp)
+       target_include_directories(ds4_tq_test_portable PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories}
+                                  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/cpu)
+       target_link_libraries(ds4_tq_test_portable PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target} Threads::Threads)
+-      target_compile_definitions(ds4_tq_test_portable PRIVATE STRATA_DSV41_TQ_CPU=1 DS4_TQ_PORTABLE=1)
++      target_compile_definitions(ds4_tq_test_portable PRIVATE STRATA_DSV41_TQ_CPU=1 DS4_TQ_PORTABLE=1 STRATA_USE_HIP=1)   # K100AI
+       if(STRATA_ENABLE_HIP)
+         target_compile_options(ds4_tq_test_portable PRIVATE "$<$<COMPILE_LANGUAGE:HIP,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/strata/dsv41/hip_extra.h>")
+       endif()
+@@ -991,7 +1002,7 @@
+       target_include_directories(ds4_iq_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include ${_strata_gpu_include_directories}
+                                  ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ggml ${CMAKE_CURRENT_SOURCE_DIR}/src/kernels/cpu)
+       target_link_libraries(ds4_iq_test PRIVATE strata_kernels_cpu ${_strata_gpu_runtime_target} Threads::Threads)
+-      target_compile_definitions(ds4_iq_test PRIVATE STRATA_DSV41_TQ_CPU=1)
++      target_compile_definitions(ds4_iq_test PRIVATE STRATA_DSV41_TQ_CPU=1 STRATA_USE_HIP=1)   # K100AI
+       if(STRATA_ENABLE_HIP)
+         target_compile_options(ds4_iq_test PRIVATE "$<$<COMPILE_LANGUAGE:HIP,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/strata/dsv41/hip_extra.h>")
+       endif()
+@@ -1009,6 +1020,10 @@
+     if(STRATA_ENABLE_HIP)
+       foreach(_t strata_dsv41_kernels strata-dsv41)
+         target_compile_options(${_t} PRIVATE "$<$<COMPILE_LANGUAGE:HIP,CXX>:SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/include/strata/dsv41/hip_extra.h>")
++      # K100AI: a gfx906/gfx928 build is a HIP build; the DeepSeek sources test STRATA_USE_HIP for that.
++      foreach(_t strata_dsv41_kernels strata-dsv41)
++        target_compile_definitions(${_t} PRIVATE STRATA_USE_HIP=1)
++      endforeach()
+       endforeach()
+     endif()
+   endif()

@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "snapshot": "dsv41-20261031-gfx928",
+  "component": "strata/dsv41",
+  "kind": "平台适配补丁集（不是完整引擎树）",
+  "engine": "strata-dsv41",
+  "engine_version": "0.1.55",
+  "engine_sha256": "6cc348778c713004d7d73f29104b747ecadb1449375d3353ffa709f07e0bec41",
+  "engine_bytes": 23413800,
+  "engine_variant": "gfx928 / DTK 26.04 / clang 17 / NATIVE_EXPERTS=ON（含 ggml CPU 专家通道）",
+  "built_at": "2026-10-31T18:05:00+08:00",
+  "reference": "upstream niko1221/strata main（取于 2026-10-31，源码内 STRATA_VERSION=\"0.1.55\"）",
+  "upstream_tarball_sha256": "98fcb991cd78ba62862175f993d72d8343747145bc08e8332eb3bab8a90cb5f7",
+  "upstream_tarball_bytes": 31619083,
+  "ggml": {
+    "repo": "ggml-org/llama.cpp",
+    "commit": "3cf03257f219afbe7334045ff7c6a06ac68c627d",
+    "tarball_sha256": "c076d7534afa0e5d0ec2a0d425b11e791c16f3de0d727221aea071cef156a280",
+    "tarball_bytes": 37513049
+  },
+  "toolchain": {
+    "image": "dcu-qwen3-5:perfect-0.0.1",
+    "dtk": "/opt/dtk-26.04",
+    "clang": "17.0.0",
+    "cmake": "3.29.0",
+    "ninja": "1.11.1",
+    "arch": "gfx928",
+    "backend": "STRATA_HIP_GFX906（wave64 兼容后端）"
+  },
+  "configure": [
+    "-DCMAKE_BUILD_TYPE=Release",
+    "-DSTRATA_HIP_GFX906=ON",
+    "-DSTRATA_ENABLE_HIP=OFF",
+    "-DCMAKE_HIP_ARCHITECTURES=gfx928",
+    "-DSTRATA_BUILD_DSV41=ON",
+    "-DSTRATA_NATIVE_EXPERTS=ON",
+    "-DSTRATA_GGML_DIR=<llama.cpp 3cf03257>",
+    "-DSTRATA_BUILD_TESTS=OFF",
+    "-DCMAKE_HIP_COMPILER=/opt/dtk/llvm/bin/clang++",
+    "-DCMAKE_HIP_FLAGS=--gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false",
+    "-DCMAKE_PREFIX_PATH=/opt/dtk/.hyhal;/opt/dtk"
+  ],
+  "build_env_note": "DTK 的 HSA 头在 /opt/dtk/.hyhal/include/hsa，hip-lang 的 CMake 包找 /opt/dtk/include/hsa；容器内补软链（脚本已含）。",
+  "patches": [
+    {
+      "file": "patches/0001-cmake-gfx928-dsv41.patch",
+      "sha256": "d8b14ff80ccbe45f0adac97834331669f77192648ebb3b3b3a7a6d673003afdb",
+      "bytes": 6519
+    },
+    {
+      "file": "patches/0002-hip-compat-cuda-names.patch",
+      "sha256": "2fda654e30795ad27b8f5802dbd876bc76c54582d41d73decad0e8ea6d84e6e0",
+      "bytes": 1287
+    },
+    {
+      "file": "patches/0003-dsv41-hip-branch.patch",
+      "sha256": "1714e6868b84282fa9a832c8cac54e4d4f07cc226096d1bf6bbc9e44c09b3c09",
+      "bytes": 7328
+    },
+    {
+      "file": "patches/0004-prefill-wmma-fallback.patch",
+      "sha256": "1901a587c0a8e0eddde7bde2f7da7c86b85d119004c878d851ebc5fcf730c7b5",
+      "bytes": 771
+    },
+    {
+      "file": "patches/0005-qwen-alignas-clang17.patch",
+      "sha256": "0d23ff3060bdb01a89f91b03667ad399b990a9b053681a9fbcbf1db99c83c222",
+      "bytes": 964
+    }
+  ],
+  "files": [
+    {
+      "path": "CMakeLists.txt",
+      "sha256": "5536946e27a937608cc0ad590b2c4eed4dbe40bdfc55805a20c06a0926221ca1",
+      "bytes": 199842,
+      "change": "modified"
+    },
+    {
+      "path": "include/strata/platform/hip_compat/cublas_v2.h",
+      "sha256": "27e0c2f1b163c841c90a2b98229f1ecc575d9fa288a5fb394c8ca5b783e911ae",
+      "bytes": 1235,
+      "change": "modified"
+    },
+    {
+      "path": "include/strata/platform/hip_compat/strata_hip.h",
+      "sha256": "ad8d3ff142eb88de8bb227a7389eb33767bcc64d0a28b1372521cd7ac6a39de5",
+      "bytes": 17317,
+      "change": "modified"
+    },
+    {
+      "path": "src/dsv41/ds4_model.cu",
+      "sha256": "e027320bc26944e93b03f0f8754d5d582c523c5c3b52afb828421f179719432f",
+      "bytes": 618943,
+      "change": "modified"
+    },
+    {
+      "path": "src/dsv41/ds4_vision.cu",
+      "sha256": "463ab484ccc60323ab7e0eaccb77647e81470e4a0275a1a8daa792d6da5e3d11",
+      "bytes": 26015,
+      "change": "modified"
+    },
+    {
+      "path": "src/kernels/cuda/iq_kernels.cu",
+      "sha256": "cb7861b499b8c7e76c02a43436871051e9e528e7123cdda498b2c9d7c41e2f37",
+      "bytes": 383371,
+      "change": "modified"
+    },
+    {
+      "path": "src/prefill/wmma_gemm.cu",
+      "sha256": "b0f26133deaf9da376b5216b625080c6a159919621cba91904b229ff7472efd1",
+      "bytes": 38027,
+      "change": "modified"
+    }
+  ],
+  "validation": {
+    "build": {
+      "errors_first_round": 50,
+      "errors_final": 0,
+      "engine_binary_present": true,
+      "seconds_native_experts_off": 661,
+      "seconds_native_experts_on": 761
+    },
+    "startup": {
+      "version_string": "strata-dsv41 0.1.55 build unknown",
+      "requires": "source /opt/dtk/env.sh（否则 dlopen libhsa-runtime64 失败）"
+    },
+    "numerics_gate": {
+      "test": "ds4_iq_test",
+      "test_sha256": "f96ba2b1c980b7b888cc6a3bdfb927a409d826faf77e37f3710492368d71288c",
+      "test_bytes": 17039752,
+      "result": "ALL OK",
+      "device": "single K100_AI card (gfx928)",
+      "types": ["IQ2_XS", "IQ2_S", "IQ3_XXS", "IQ3_S", "IQ4_XS", "IQ1_M"],
+      "tolerances": "token gate_up 1e-5, token down 1e-6, set gate_up 1e-2, set down 3e-3",
+      "worst_token_gate_up": "4.63e-08 (IQ2_XS)",
+      "worst_token_down": "4.60e-08 (IQ2_XS)",
+      "cpu_lane": "同类型同容差全部 ok（与 ggml 解码 + 双精度参考一致）"
+    },
+    "container_recipe": "docker run --privileged --device /dev/kfd --device /dev/dri -v /usr/local/hyhal:/usr/local/hyhal:ro -v /opt/hyhal:/opt/hyhal:ro"
+  },
+  "not_verified": [
+    "模型加载与整模型推理（本目录不含权重，官方 2.00bpw 需 138 GB + Engram 111 GB + DSpark 8 GB）",
+    "注意力 / 路由 / 超连接 / 长上下文的整模型数值（ds4_iq_test 只覆盖 i-quant 专家内核）",
+    "真实专家规模下的显存与内存分层",
+    "字节级可复现（clean_rebuild_verified 为 false）"
+  ],
+  "known_traps": [
+    "DS4_FAST_ATTN=1 的 WMMA 快速路径在 gfx928 上走 __builtin_trap()（ds4_wmma.cuh 只实现 gfx11/gfx12），不要开启",
+    "只挂 renderD128 或未挂宿主机 HyHAL 时卡被识别为 KONGMING，HIP 报 no ROCm-capable device"
+  ],
+  "clean_rebuild_verified": false
+}

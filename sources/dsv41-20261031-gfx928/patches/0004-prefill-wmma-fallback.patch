@@ -1,0 +1,17 @@
+--- a/src/prefill/wmma_gemm.cu
++++ b/src/prefill/wmma_gemm.cu
+@@ -720,11 +720,14 @@
+     return false;
+ }
+ // No padded product in this build (no gfx11 target): prefill.cpp does not pad an activation's row stride.
++// K100AI: without STRATA_USE_HIP, wmma_gemm.h already defines these two inline, so define them only when it does not.
++#if defined(STRATA_USE_HIP)
+ bool strata_pf_padded_gemm_available() { return false; }
+ bool strata_pf_hcdown_bf16(const uint16_t*, int64_t, const uint16_t*, const uint16_t*, int64_t, int64_t, float*, float*,
+                            int64_t, int64_t, void*) {
+     return false;
+ }
++#endif
+ bool strata_pf_hcdown_exact_bf16(const uint16_t*, int64_t, const uint16_t*, float*, int64_t, int64_t, int64_t, void*) {
+     return false;
+ }

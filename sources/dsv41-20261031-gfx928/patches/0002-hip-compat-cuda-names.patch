@@ -1,0 +1,26 @@
+--- a/include/strata/platform/hip_compat/strata_hip.h
++++ b/include/strata/platform/hip_compat/strata_hip.h
+@@ -307,3 +307,13 @@
+ #define __byte_perm(x, y, s) strata_byte_perm((unsigned int) (x), (unsigned int) (y), (unsigned int) (s))
+ 
+ #endif  // device side
++
++// K100AI (gfx928): CUDA names the DeepSeek-V4.1 engine uses that this shim did not carry yet.
++#ifndef __grid_constant__
++#define __grid_constant__
++#endif
++#define cudaOccupancyMaxActiveBlocksPerMultiprocessor hipOccupancyMaxActiveBlocksPerMultiprocessor
++#define cudaDeviceGetStreamPriorityRange hipDeviceGetStreamPriorityRange
++#define cudaStreamCreateWithPriority hipStreamCreateWithPriority
++#define cudaDevAttrIntegrated hipDeviceAttributeIntegrated
++#define cudaMemcpyND hipMemcpyND
+--- a/include/strata/platform/hip_compat/cublas_v2.h
++++ b/include/strata/platform/hip_compat/cublas_v2.h
+@@ -24,3 +24,7 @@
+ #define CUBLAS_DEFAULT_MATH 0
+ #define cublasSetMathMode(handle, mode) HIPBLAS_STATUS_SUCCESS
+ #define cublasSetWorkspace(handle, ptr, bytes) HIPBLAS_STATUS_SUCCESS
++#define cublasSgemm hipblasSgemm
++// rocBLAS picks its own solution; the tensor-op algorithm knob is accepted and ignored
++#define CUBLAS_GEMM_DEFAULT_TENSOR_OP HIPBLAS_GEMM_DEFAULT
++#define CUBLAS_GEMM_DFALT_TENSOR_OP HIPBLAS_GEMM_DEFAULT
