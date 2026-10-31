@@ -10,11 +10,18 @@
     "format": "safetensors, DeepseekV41ForCausalLM",
     "quantization": {
       "quant_method": "fp8",
-      "weight_block_size": [32, 32],
+      "weight_block_size": [
+        32,
+        32
+      ],
       "scale_fmt": "ue8m0",
       "expert_dtype": "fp4"
     },
-    "embeds": ["Engram 表 (layers.1 / layers.14)", "DSpark 草稿 (mtp.0-2)", "视觉塔 (vision.* + aligner.*)"],
+    "embeds": [
+      "Engram 表 (layers.1 / layers.14)",
+      "DSpark 草稿 (mtp.0-2)",
+      "视觉塔 (vision.* + aligner.*)"
+    ],
     "note": "社区微调（abliterated），与 ISTA-DASLab 官方 GGUF 不是同一套权重，不能混用"
   },
   "converter": {
@@ -86,7 +93,12 @@
   "pack": {
     "command": "tools/dsv41/pack_gguf.py --model <dir> --shards DSV41-UNC-v3.gguf --dspark-gguf dspark-UNC-bf16.gguf --mmproj mmproj-UNC-bf16.gguf --dspark-noise-token 128799 --out <dir>/pack3",
     "bytes": 8500000,
-    "files": ["ds4.txt", "tensors.txt", "engram.bin", "tokenizer/"],
+    "files": [
+      "ds4.txt",
+      "tensors.txt",
+      "engram.bin",
+      "tokenizer/"
+    ],
     "note": "纯元数据，权重仍从 GGUF 原地读；--dspark-noise-token 必需（转换器写在 dflash.mask_token_id，打包器读 dspark.noise_token_id）",
     "pack_info": {
       "exit": 0,
@@ -129,7 +141,11 @@
       "patch": "patches/0002-ds4-launch-probe.patch",
       "method": "DS4_PRELOG 每次 launch 前打印 file:line/grid/block + DS4_LAUNCH_CHECK 在查错前 cudaDeviceSynchronize()",
       "result": "最后一次在飞的 launch 稳定是 src/dsv41/ds4_kernels.cu:2129 = route_publish_kernel（__launch_bounds__(512)，block 512，grid = T）",
-      "reproduced_with": ["--window 16", "--window 4", "--window 1（grid=1，只有 t=0）"],
+      "reproduced_with": [
+        "--window 16",
+        "--window 4",
+        "--window 1（grid=1，只有 t=0）"
+      ],
       "ruled_out": [
         "32 位 shuffle 掩码：gfx906 兼容层已把 __shfl_*_sync 改写成 32 波宽（STRATA_SHFL_W）",
         "块大小与 __launch_bounds__ 不一致：route_publish_kernel 是 512/512",
@@ -180,6 +196,13 @@
         "seconds": 283,
         "note": "283 s 含装载（约 130 s）与 16 个 token；判据是回答里必须出现 Paris"
       }
+    },
+    "serve": {
+      "what": "serve/server.py 把引擎当常驻子进程，对外给 OpenAI 与 Anthropic 端点（--serve 行协议之上）",
+      "health": "{\"status\": \"ok\", \"max_context\": 32768, \"loaded\": true, \"service\": \"strata\", \"images\": true, \"api_key\": false}",
+      "models": "data[0].id = DeepSeek-V4.1-Flash-1017 (FP8 checkpoint, MXFP4 experts, MXFP8 engram), n_ctx 32768",
+      "chat": "POST /v1/chat/completions -> 200 in 8.9 s, finish_reason stop, content 法国首都是巴黎。, usage 40/31/71",
+      "note": "默认无鉴权（api_key false）；放到局域网上要加 --api-key 或 STRATA_API_KEY"
     }
   },
   "clean_rebuild_verified": false,

@@ -265,6 +265,42 @@ The capital of France is Paris.<|end▁of▁sentence|>
 
 速度（另一次 64-token 请求，`--gpus 0,1 --mmap-experts on`，装载 183 s）：模型在第 8 个 token 给出 EOS 就停了，**13.78 tok/s**；`decode per token: layers 18.11 ms（其中 CPU 通道 10.60）、head wait 53.85、Engram 0.22 毫秒`，每个 token 从盘上读 5.7 MB，1680 个专家里只有 26 个落在 CPU 通道（其余在 2×64 GiB 显存里）。这份 pack 是"BF16 稠密 + MXFP4 专家 + MXFP8 Engram"，比官方 2.00bpw 大得多；要更快就得在打包前把专家/Engram 重新量化。
 
+### 对外服务：OpenAI / Anthropic 兼容端点（2026-11-01 04:10）
+
+`strata-dsv41 --serve` 本身是 **stdin/stdout 行协议**（`GEN <max_new> <ids>`、`STOP`、`QUIT`），不是一个能直接给应用连的接口。真正的 HTTP 层是项目里的 `serve/server.py`，它把引擎当常驻子进程、自己加 `--serve`，对外暴露 OpenAI 与 Anthropic 两套端点。
+
+`serve.json`（本目录）就是它的引擎配置：
+
+```json
+{
+  "exe": "/4T-02/strata-work/build-dsv41-full/strata-dsv41",
+  "args": ["--pack", "/4T-02/dsv41-conv/pack4", "--gpus", "0,1", "--mmap-experts", "on"],
+  "cwd": "/4T-02/strata-work",
+  "model_name": "DeepSeek-V4.1-Flash-1017 (FP8 checkpoint, MXFP4 experts, MXFP8 engram)"
+}
+```
+
+`serve.sh` 用它在 `dcu-qwen3-5` 容器里起一个后台容器（`dsv41-serve`，端口 8095 映射到宿主）。实测：
+
+```
+GET  /health          {"status": "ok", "max_context": 32768, "loaded": true, "service": "strata"}
+GET  /v1/models       data[0].id = "DeepSeek-V4.1-Flash-1017 (FP8 checkpoint, ...)"
+POST /v1/chat/completions  {"messages":[{"role":"user","content":"用一句中文回答：法国首都是哪里？"}]}
+    → 200, 8.9 s, finish_reason "stop", content "法国首都是巴黎。"
+      usage {prompt 40, completion 31, total 71}
+```
+
+任何 OpenAI 客户端改一下 `base_url` 就能用：
+
+```python
+from openai import OpenAI
+c = OpenAI(base_url="http://192.168.88.222:8095/v1", api_key="none")
+print(c.chat.completions.create(model="DeepSeek-V4.1-Flash-1017",
+      messages=[{"role": "user", "content": "介绍一下你自己"}]).choices[0].message.content)
+```
+
+**注意**：服务默认**没有鉴权**（`/health` 里 `"api_key": false`），而且 `/v1/models` 报 `"images": true`（pack 里带了视觉塔，`GENI` 可传图）。放到局域网上用建议加 `--api-key <key>`（或环境变量 `STRATA_API_KEY`），否则同网段任何人都能用。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。
