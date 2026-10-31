@@ -128,6 +128,33 @@ Invalid address access: 0x7f08a25fc000, Error code: 1
 
 所以下一步不是找某个越界下标，而是**按"wave64 下工作组与同步"这个方向查**：优先看窗口/分块注意力内核里 `__syncthreads()` 与波内 shuffle/`__syncwarp` 的配合（例如 `sparse_attn_packed_kernel` 里 `warp_sum`/`warp_max` 用了 32 位掩码、而块内波数变成两倍的情形）。
 
+### 探针与归因（2026-11-01 03:00）
+
+`patches/0002-ds4-launch-probe.patch`（**仅调试用**）给 `ds4_launch.h` 加了两件事：
+
+- `DS4_PRELOG=1`：每次 launch 前打印一行 `L <file>:<line> <grid> <block> <shared>` 并 flush。设备故障会让进程直接死掉、拿不到错误码，所以**最后一行就是当时在飞的那次 launch**；
+- `DS4_LAUNCH_CHECK=1`（上游已有）在读取错误前加一次 `cudaDeviceSynchronize()`：VM fault 是异步的，`hipGetLastError` 在 launch 点永远是成功。
+
+用它重建后（只重编 dsv41 的 TU，约 6 分钟）跑 `--window 1/4/16` 三种窗口，**带同步的归因稳定指向同一个内核**：
+
+```
+L /work/strata/src/dsv41/ds4_kernels.cu:2129  1,1,1  512,1,1  0
+  = route_publish_kernel（__launch_bounds__(512)，block 512，grid = T）
+```
+
+即使 `--window 1`（grid=1，只有 t=0 一个 token）也崩，所以不是 `logits += t * 1024` 这类按 token 的跨度越界。
+
+**同时证伪了一个很诱人的假设**：`route_publish_kernel` 会把路由结果写进 `Req`，而 `Req` 是 `cudaHostAlloc(..., cudaHostAllocMapped)` 分配的主机内存。写了一个 10 行的微测试单独验证（`hmtest/hm.hip`）：DCU **可以**被 GPU 直接写这块内存——
+
+```
+hipHostMalloc           : no error
+hipHostGetDevicePointer : no error (0x7f2b82929000)
+write via device ptr    : no error value=42
+write via host ptr      : no error value=42
+```
+
+所以 `Req` 不是根因。下一步只剩这个内核自己的访问要看：`req->x[t][i]`（只有 `on_cpu` 时执行，一次 5120 个 float 写进主机内存）与 `vram[pick[r]]`。最省的一次实验是给 `on_cpu` 那个分支加一个开关、关掉它再跑：如果通过，根因就是那次批量主机写。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。

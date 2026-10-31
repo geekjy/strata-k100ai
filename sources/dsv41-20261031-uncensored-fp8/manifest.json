@@ -32,6 +32,14 @@
       "bytes": 3572,
       "what": "Engram 表以 MXFP8 写出，块内顺序 [scale][32 codes]（尺度在前），逐字节无损；不是上游的 BF16",
       "why": "strata 的 Engram reader 只收 MXFP8 / Q6_K / IQ4_NL，且按 [scale, 32 codes] 解包（ds4_engram_io.hpp:228）；BF16 会在装载时报错。文件同时从 393.86 GB 降到 202.8 GB"
+    },
+    {
+      "file": "patches/0002-ds4-launch-probe.patch",
+      "sha256": "236e12ecaea7116b4eb13fad89a922c1d2d3c26bfe6b80267f097d9bee831c47",
+      "bytes": 2278,
+      "what": "调试用：DS4_PRELOG 打印每次 launch（file:line/grid/block），DS4_LAUNCH_CHECK 在查错前先同步",
+      "why": "设备故障会让进程直接死掉、不设 hipGetLastError，否则无法定位是哪个内核",
+      "warning": "不要进发布构建：每次 launch 都会同步并打印"
     }
   ],
   "model_dir_addition": {
@@ -108,13 +116,29 @@
     "memory_notes": [
       "--mmap-experts auto 会把 CPU 通道 244.8 GB 专家拷进内存，配 459 GB 页缓存导致 OOM（anon-rss 217 GB 时被杀）",
       "正确姿势：--mmap-experts on + 启动前 sync; echo 3 > /proc/sys/vm/drop_caches"
-    ]
+    ],
+    "probe_attribution": {
+      "patch": "patches/0002-ds4-launch-probe.patch",
+      "method": "DS4_PRELOG 每次 launch 前打印 file:line/grid/block + DS4_LAUNCH_CHECK 在查错前 cudaDeviceSynchronize()",
+      "result": "最后一次在飞的 launch 稳定是 src/dsv41/ds4_kernels.cu:2129 = route_publish_kernel（__launch_bounds__(512)，block 512，grid = T）",
+      "reproduced_with": ["--window 16", "--window 4", "--window 1（grid=1，只有 t=0）"],
+      "ruled_out": [
+        "32 位 shuffle 掩码：gfx906 兼容层已把 __shfl_*_sync 改写成 32 波宽（STRATA_SHFL_W）",
+        "块大小与 __launch_bounds__ 不一致：route_publish_kernel 是 512/512",
+        "按 token 的跨度越界：--window 1 时 grid=1、只有 t=0，仍然崩",
+        "host-mapped 内存不可写：微测试（gfx928，hipHostMalloc(Mapped)）里 GPU 经 device ptr 与 host ptr 写入都成功（value=42）"
+      ],
+      "remaining_suspects": [
+        "req->x[t][i] 的批量主机写（仅 on_cpu 时执行，一次 5120 个 float）",
+        "vram[pick[r]] 的读取"
+      ]
+    }
   },
   "clean_rebuild_verified": false,
   "known_issues": [
     "磁盘上的 DSV41-UNC-v3.gguf 用旧的 Engram 块顺序（[32 codes][scale]）生成，必须用本目录修正后的补丁重新生成，或对两个 Engram 张量就地做 33 字节块内旋转，否则输出是噪声",
-    "第一次前向触发 HSA workgroup 违规（not in the same workgroup as the group_leader），未修",
-    "DS4_LAUNCH_CHECK / HIP_LAUNCH_BLOCKING=1 都抓不到该故障：运行库不通过 hipGetLastError 上报"
+    "第一次前向触发 GPU VMFault；带同步的探针把最后一次在飞的 launch 定位到 route_publish_kernel（ds4_kernels.cu:2129），未修",
+    "DS4_LAUNCH_CHECK / HIP_LAUNCH_BLOCKING=1 单用都抓不到该故障：运行库不通过 hipGetLastError 上报，需要在查错前同步（见 patches/0002）"
   ],
   "not_verified": [
     "整模型数值（首个 kernel 就越界，没有产出任何 token）",

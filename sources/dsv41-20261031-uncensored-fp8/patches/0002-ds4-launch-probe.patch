@@ -1,0 +1,36 @@
+src/dsv41/ds4_launch.h: per-launch probe for the gfx928 fault (K100AI, DEBUG ONLY).
+
+Two additions, both off unless their variable is set:
+  DS4_PRELOG=1     prints 'L <file>:<line> grid block shared' before every launch, unbuffered;
+                   a device fault kills the process without an error code, so the last line is
+                   the launch that was in flight.
+  DS4_LAUNCH_CHECK=1  (already upstream) now also waits with cudaDeviceSynchronize() before
+                   reading the error: a VMFault is asynchronous and never shows up in
+                   hipGetLastError at the launch itself.
+
+Do not ship this in a release build: it syncs (and prints) once per launch.
+
+diff --git a/src/dsv41/ds4_launch.h b/src/dsv41/ds4_launch.h
+--- a/src/dsv41/ds4_launch.h
++++ b/src/dsv41/ds4_launch.h
+@@ -9,10 +9,19 @@
+ template <class... KA, class... CA>
+ inline void strata_ds4_launch_at(const char* file, int line, void (*kernel)(KA...), dim3 grid, dim3 block, size_t shared,
+                                  cudaStream_t stream, CA&&... args) {
++    static const bool prelog = std::getenv("DS4_PRELOG") != nullptr;   // K100AI probe: the last line before a fault kills the process is the launch that caused it
++    if (prelog) {
++        std::fprintf(stderr, "L %s:%d %u,%u,%u %u,%u,%u %zu\n", file, line,
++                     grid.x, grid.y, grid.z, block.x, block.y, block.z, shared);
++        std::fflush(stderr);
++    }
+     kernel<<<grid, block, shared, stream>>>(static_cast<KA>(args)...);
+     static const bool check = std::getenv("DS4_LAUNCH_CHECK") != nullptr;   // report the launch that failed (not a later call)
+     if (check) {
+-        const cudaError_t e = cudaGetLastError();
++        cudaError_t e = cudaGetLastError();
++        // K100AI probe: a device fault (VMFault / workgroup error) is asynchronous and does NOT set
++        // hipGetLastError, so wait here and the failure surfaces at the launch that caused it.
++        if (e == cudaSuccess) e = cudaDeviceSynchronize();
+         if (e != cudaSuccess)
+             std::fprintf(stderr, "ds4 launch failed at %s:%d: %s (grid %u,%u,%u block %u,%u,%u shared %zu)\n", file, line,
+                          cudaGetErrorString(e), grid.x, grid.y, grid.z, block.x, block.y, block.z, shared);
