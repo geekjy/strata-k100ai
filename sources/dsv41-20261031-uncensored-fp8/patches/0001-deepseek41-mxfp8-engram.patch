@@ -1,0 +1,58 @@
+conversion/deepseek41.py: carry the Engram tables as MXFP8 instead of BF16 (K100AI).
+
+The Strata engine's Engram reader takes MXFP8, Q6_K and IQ4_NL, not BF16: a model converted by
+upstream's converter loads its dense weights, opens the Engram layer and then stops with
+"engram.embed.weight type BF16 is not one the Engram reader handles".
+
+The checkpoint's Engram tables are e4m3 with one e8m0 scale per 32 elements, which is exactly an
+MXFP8 block (32 value bytes + 1 scale byte), so they are copied over losslessly: the upstream code
+dequantizes them to BF16 (2 bytes a value, twice the file).  gguf-py has no MXFP8 id, so the
+converter registers llama.cpp's own id (43) with its block size before writing.
+
+diff --git a/conversion/deepseek41.py b/conversion/deepseek41.py
+--- a/conversion/deepseek41.py
++++ b/conversion/deepseek41.py
+@@ -14,6 +14,17 @@
+ 
+ from .base import LazyTorchTensor, ModelBase, TextModel, gguf
+ from .deepseek import DeepseekV4FlashVisionModel, DeepseekV4Model
++
++# K100AI: llama.cpp's gguf-py carries no MXFP8 id (only MXFP4), but the Strata engine's Engram reader accepts
++# MXFP8, Q6_K and IQ4_NL - not BF16.  The checkpoint's Engram tables are e4m3 with one e8m0 scale per 32
++# elements, which is exactly MXFP8's block, so they can be carried over losslessly as 32 value bytes + 1 scale
++# byte.  Register the id (llama.cpp's own 43) with its block size so the writer can emit it.
++_MXFP8_GGML_ID = 43
++try:
++    from gguf.constants import GGML_QUANT_SIZES as _GGML_QUANT_SIZES
++    _GGML_QUANT_SIZES[_MXFP8_GGML_ID] = (32, 33)
++except Exception:   # pragma: no cover - a gguf-py without constants
++    pass
+ 
+ 
+ # Engram hash constants from inference/engram.py, stored in the GGUF: the token map needs the HF tokenizers
+@@ -237,6 +248,7 @@
+         n_rows = sum(p[2] for p in parts)
+ 
+         def chunks() -> Iterable[np.ndarray]:
++            # K100AI: MXFP8 blocks, lossless: the 32 e4m3 value bytes of a block followed by its e8m0 scale byte.
+             from safetensors import safe_open
+             for wn, sn, rows, wpart, spart in parts:
+                 with safe_open(wpart, framework="pt") as fw, safe_open(spart, framework="pt") as fs:
+@@ -245,11 +257,12 @@
+                         q = ws[r0:r0 + (1 << 18)].view(torch.uint8).reshape(-1, 32)
+                         e = ss[r0:r0 + (1 << 18)].view(torch.uint8).reshape(-1, 1)
+                         _e8m0_check(e.numpy(), sn)
+-                        v = (q.view(torch.float8_e4m3fn).float() * torch.exp2(e.float() - 127)).reshape(-1, dim)
+-                        yield (v if self._f32 else v.bfloat16()).view(torch.uint8).numpy()
+-        qt = gguf.GGMLQuantizationType.F32 if self._f32 else gguf.GGMLQuantizationType.BF16
+-        data = cast(np.ndarray, _StreamedBytes((n_rows, dim * (4 if self._f32 else 2)), chunks))
+-        self.gguf_writer.add_tensor(name, data, raw_dtype=qt)
++                        out = np.empty((q.shape[0], 33), dtype=np.uint8)
++                        out[:, :32] = q.numpy()
++                        out[:, 32:] = e.numpy()
++                        yield out.reshape(-1)
++        data = cast(np.ndarray, _StreamedBytes((n_rows, dim // 32 * 33), chunks))
++        self.gguf_writer.add_tensor(name, data, raw_dtype=_MXFP8_GGML_ID)
+ 
+     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+         if not self._dsv4_mxfp4_generated:

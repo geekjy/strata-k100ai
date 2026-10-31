@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "snapshot": "dsv41-20261031-uncensored-fp8",
+  "component": "strata/dsv41",
+  "kind": "FP8 checkpoint → GGUF → native pack 的转换流水线（不是引擎源码，也不是权重分发）",
+  "input": {
+    "path": "/4T-02/DeepSeek-V4.1-Flash-1017-UNCENSORED-FP8",
+    "bytes": 476000000000,
+    "shards": 48,
+    "format": "safetensors, DeepseekV41ForCausalLM",
+    "quantization": {
+      "quant_method": "fp8",
+      "weight_block_size": [32, 32],
+      "scale_fmt": "ue8m0",
+      "expert_dtype": "fp4"
+    },
+    "embeds": ["Engram 表 (layers.1 / layers.14)", "DSpark 草稿 (mtp.0-2)", "视觉塔 (vision.* + aligner.*)"],
+    "note": "社区微调（abliterated），与 ISTA-DASLab 官方 GGUF 不是同一套权重，不能混用"
+  },
+  "converter": {
+    "source": "ggml-org/llama.cpp master",
+    "file": "conversion/deepseek41.py",
+    "subtree_fetched": "convert_hf_to_gguf.py + conversion/ + gguf-py/（136 个文件，2.1 MB）",
+    "retrieved": "2026-10-31",
+    "upstream_landing": "ggml-org/llama.cpp#31086（DeepSeek-V4.1 支持，2026-10-25 合并）",
+    "why_not_the_pinned_tree": "本项目 pin 的 llama.cpp 3cf03257（9 月 20 日）早于该合并，没有 deepseek41 转换器"
+  },
+  "patches": [
+    {
+      "file": "patches/0001-deepseek41-mxfp8-engram.patch",
+      "sha256": "a84779fc8e5a5f3ebfd0d3f0e1d03713d9fa821fd034713df0bbd21831228d18",
+      "bytes": 3381,
+      "what": "Engram 表以 MXFP8 写出（32 值字节 + 1 尺度字节，逐字节无损），而不是上游的 BF16",
+      "why": "strata 的 Engram reader 只收 MXFP8 / Q6_K / IQ4_NL；BF16 会在装载时报错。文件同时从 393.86 GB 降到 202.8 GB"
+    }
+  ],
+  "model_dir_addition": {
+    "file": "chat_template.jinja",
+    "bytes": 18509,
+    "sha256": "4d61d22c90ea0cdf15c7e298f7215f23eeffd20f8eed8fb517fda5fb64693d99",
+    "source": "ISTA-DASLab/DeepSeek-V4.1-Flash-1017-GSQ-RCO-GGUF",
+    "why": "checkpoint 的 tokenizer_config.json 没有 chat_template（模板在 encoding/encoding.py 里是 Python 字符串）；没有它 GGUF 不带模板，pack_gguf.py 拒绝打包（#299）。gguf-py 的 SpecialVocab 会读模型目录下的 chat_template.jinja"
+  },
+  "outputs": [
+    {
+      "file": "DSV41-UNC-v3.gguf",
+      "bytes": 508376762656,
+      "tensors": 1043,
+      "composition": "BF16 18.6 GB, F32 0.5 GB, MXFP4 296.0 GB, MXFP8 202.8 GB",
+      "sha256": null,
+      "sha256_note": "508 GB 的整文件哈希未计算（约 10 分钟）；需要时用 sha256sum 补"
+    },
+    {
+      "file": "dspark-UNC-bf16.gguf",
+      "bytes": 8506263232,
+      "tensors": 78,
+      "sha256": "38ced7118b4373f198bd673b8935e3661251243399e7b223cf31d798a42e7d96",
+      "architecture": "dflash",
+      "detail": "3 块，target_layers [37,38,39]，128 专家，block_size 5，markov_rank 256"
+    },
+    {
+      "file": "mmproj-UNC-bf16.gguf",
+      "bytes": 972208704,
+      "tensors": 298,
+      "sha256": "121c524f8d467ec891fda2a850e0f91eb086c5ae1ba4261b1ce59add5889c30e",
+      "architecture": "clip",
+      "detail": "projector_type deepseek41v，32 块，image token 129264"
+    }
+  ],
+  "pack": {
+    "command": "tools/dsv41/pack_gguf.py --model <dir> --shards DSV41-UNC-v3.gguf --dspark-gguf dspark-UNC-bf16.gguf --mmproj mmproj-UNC-bf16.gguf --dspark-noise-token 128799 --out <dir>/pack3",
+    "bytes": 8500000,
+    "files": ["ds4.txt", "tensors.txt", "engram.bin", "tokenizer/"],
+    "note": "纯元数据，权重仍从 GGUF 原地读；--dspark-noise-token 必需（转换器写在 dflash.mask_token_id，打包器读 dspark.noise_token_id）",
+    "pack_info": {
+      "exit": 0,
+      "tensors": 48824,
+      "files": 3,
+      "experts_bytes": 288800000000,
+      "dense_bytes": 229070000000,
+      "engram_bytes": 203390000000,
+      "engram_type": "MXFP8",
+      "dspark_noise_token_id": 128799,
+      "last_line": "files: 3, all present and long enough"
+    }
+  },
+  "validation": {
+    "conversion": {
+      "exit": 0,
+      "wall_clock_s": 1560,
+      "throughput": "~330 MB/s"
+    },
+    "load": {
+      "exit": 0,
+      "loaded_in_s": 134.6,
+      "cards": 2,
+      "tensor_parallel": 2,
+      "per_card": "weights 8.74 GB + experts 53.21 GB (5620 of 15360)",
+      "cpu_lane": "9740 experts, 183.4 GB, in place (mmap)",
+      "engram": "rows read on 16 threads, 256 MB row cache"
+    },
+    "first_forward": {
+      "result": "FAIL: GPU VMFault",
+      "detail": "prompt 0 tokens, prompt path warmed up in 233 ms, then 'Invalid address access 0x7f08a25fc000, Error code: 1' / 'KERNEL VMFault' on device 0",
+      "meaning": "gfx928(wave64) 上的内核越界；dsv41 内核按 wave32 写（lane & 31 / tid >> 5 / __shfl）"
+    },
+    "memory_notes": [
+      "--mmap-experts auto 会把 CPU 通道 244.8 GB 专家拷进内存，配 459 GB 页缓存导致 OOM（anon-rss 217 GB 时被杀）",
+      "正确姿势：--mmap-experts on + 启动前 sync; echo 3 > /proc/sys/vm/drop_caches"
+    ]
+  },
+  "clean_rebuild_verified": false,
+  "not_verified": [
+    "整模型数值（首个 kernel 就越界，没有产出任何 token）",
+    "视觉/多模态路径（只验证了 mmproj 的元数据与装载）",
+    "DSpark 草稿的实际收益（本机专家远超显存，引擎自动关闭：--dspark auto 判定不加载）",
+    "性能（未产出 token，无 tt/s 数据）"
+  ]
+}

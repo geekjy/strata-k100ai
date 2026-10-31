@@ -1,5 +1,18 @@
 # 更新记录
 
+## 2026-10-31 FP8 权重转 GGUF 并打包：装载成功，首次前向在 gfx928 上越界（main，未打新标签）
+
+- 新增 [sources/dsv41-20261031-uncensored-fp8](sources/dsv41-20261031-uncensored-fp8/)：把一份 **FP8 块量化（e4m3 + 32×32 ue8m0）+ FP4 专家**的 DeepSeek-V4.1-Flash 社区微调（476 GB，48 个 safetensors，Engram/DSpark/视觉塔都在权重里）转成 `strata-dsv41` 能读的 GGUF 与 native pack 的完整流水线、补丁与实测数据。
+- 用**上游 llama.cpp master 的 `conversion/deepseek41.py`**（ggml-org/llama.cpp#31086，2026-10-25 合并；本项目 pin 的 `3cf03257` 早于该合并）。它的设计正好对上这类 checkpoint：FP8 线性层反量化成 BF16、**路由专家逐比特拷成 MXFP4**、DSpark 与视觉塔分别出独立 GGUF。
+- 两处必需改动：
+  1. `patches/0001-deepseek41-mxfp8-engram.patch` —— Engram 表必须写成 **MXFP8** 而不是 BF16（strata 的 Engram reader 只收 MXFP8 / Q6_K / IQ4_NL）。原始 Engram 就是 e4m3 + 每 32 元素一个 e8m0 尺度，正好是 MXFP8 的块，**逐字节无损**，文件还从 393.86 GB 降到 202.8 GB。
+  2. 模型目录补 `chat_template.jinja`（18,509 B，SHA-256 `4d61d22c…`，取自 ISTA-DASLab 的 GGUF 仓库）：checkpoint 的 `tokenizer_config.json` 没有模板，缺它 `pack_gguf.py` 会按 #299 拒绝打包。
+- 产物：`DSV41-UNC-v3.gguf` **508.4 GB**（BF16 18.6 / F32 0.5 / MXFP4 296.0 / MXFP8 202.8，1043 张量，转换约 26 分钟）、`dspark-UNC-bf16.gguf` 8.5 GB（`dflash`，3 块）、`mmproj-UNC-bf16.gguf` 1.0 GB（`deepseek41v`，32 块）。打包只需 `--dspark-noise-token 128799`（转换器把噪声 token 写在 `dflash.mask_token_id`，打包器读 `dspark.noise_token_id`）。
+- **实测**：`--pack-info` exit 0（48,824 张量 / 3 文件 / 专家 288.8 GB / 稠密 229.07 GB，其中 Engram 203.39 GB）；引擎装载 **134.6 s**，双卡 tensor parallel 2（每卡权重 8.74 GB + 专家 53.21 GB），9740 个专家留在文件里按需读（183.4 GB）。
+- **卡住的地方**：第一个 kernel 触发 **GPU VMFault**（`Invalid address access 0x7f08a25fc000` / Hygon HOSTQUEUE 报告），一个 token 都没产出。`ds4_iq_test` 的 i-quant 专家门在真卡上是 `ALL OK` 的，所以问题落在注意力 / 路由 / Engram 计算这些仍按 wave32 写的内核上。
+- 记录一个内存坑：`--mmap-experts auto` 会把 CPU 通道的 244.8 GB 专家**拷进内存**，叠加转换残留的 459 GB 页缓存直接 OOM（anon-rss 217 GB 时被杀）；应使用 `--mmap-experts on` 并在启动前 `sync; echo 3 > /proc/sys/vm/drop_caches`。
+- 边界（不声称已跑通）：整模型数值、视觉路径、DSpark 收益、性能均未验证；这份 pack 是「BF16 稠密 + MXFP4 专家 + MXFP8 Engram」，比官方 2.00bpw 大得多，要提速需在打包前重新量化。
+
 ## 2026-10-31 源码快照：DeepSeek-V4.1-Flash 引擎在 K100AI 上编译打通（main，未打新标签）
 
 - 新增 [sources/dsv41-20261031-gfx928](sources/dsv41-20261031-gfx928/)：把上游的 DeepSeek-V4.1-Flash 引擎 `strata-dsv41` 移植到 **wave64（gfx906 兼容）后端**的 5 个补丁、构建脚本、逐文件 SHA-256 与验证数据。上游原状是两条 HIP 后端互斥——wave32 后端拒绝 `gfx928`（`cmake/hip_backend.cmake:31`），wave64 后端又在 `CMakeLists.txt:910` 排除 `STRATA_BUILD_DSV41`——所以 DeepSeek 引擎此前在 K100AI 上根本无法开始编译。
