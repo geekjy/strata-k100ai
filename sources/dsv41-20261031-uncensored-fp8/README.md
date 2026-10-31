@@ -263,6 +263,8 @@ The capital of France is Paris.<|end▁of▁sentence|>
 
 至此这条链路是通的：**FP8/FP4 checkpoint → GGUF → native pack → 在 K100_AI（gfx928、wave64）上生成正确文本**。283 秒包含装载（约 130 s）与 16 个 token。
 
+速度（另一次 64-token 请求，`--gpus 0,1 --mmap-experts on`，装载 183 s）：模型在第 8 个 token 给出 EOS 就停了，**13.78 tok/s**；`decode per token: layers 18.11 ms（其中 CPU 通道 10.60）、head wait 53.85、Engram 0.22 毫秒`，每个 token 从盘上读 5.7 MB，1680 个专家里只有 26 个落在 CPU 通道（其余在 2×64 GiB 显存里）。这份 pack 是"BF16 稠密 + MXFP4 专家 + MXFP8 Engram"，比官方 2.00bpw 大得多；要更快就得在打包前把专家/Engram 重新量化。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。
