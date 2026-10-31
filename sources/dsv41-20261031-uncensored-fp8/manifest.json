@@ -170,8 +170,15 @@
           "meaning": "pick[0] = 0x7FFFFFFF = INT_MAX"
         },
         "why_layer1": "第 2 次调用是层 1，engram_layer_ids = 1,14；层 0 没有 Engram，所以完好",
-        "fix": "patches/0001 已把块顺序改成 [scale][32 codes]，只需把磁盘上的 v3 按新补丁重新生成（或对两个 Engram 张量做 33 字节块内旋转），再重新打包",
-        "status": "fix 已就绪，尚未重跑"
+        "fix": "patches/0001 已把块顺序改成 [scale][32 codes]；磁盘上的 v3 用就地旋转修正（202.8 GB / 445 s，456 MB/s），其余 306 GB 未动",
+        "status": "FIXED AND VERIFIED：重新打包为 pack4 后 smoke 通过，输出 'The capital of France is Paris.<|end▁of▁sentence|>'，exit 0，283 s"
+      },
+      "smoke_after_fix": {
+        "command": "python3 tools/dsv41/smoke.py --exe strata-dsv41 --pack /4T-02/dsv41-conv/pack4 --gpus 0,1 --tokens 16",
+        "output": "The capital of France is Paris.<|end▁of▁sentence|>",
+        "exit": 0,
+        "seconds": 283,
+        "note": "283 s 含装载（约 130 s）与 16 个 token；判据是回答里必须出现 Paris"
       }
     }
   },

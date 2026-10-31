@@ -249,6 +249,20 @@ python3 tools/dsv41/pack_gguf.py --model <dir> --shards DSV41-UNC-v4.gguf --dspa
 
 （也可以只对两个 Engram 张量做 33 字节块内旋转，省掉 26 分钟的整模型重转：读 200 GB、写回 200 GB，约 5 分钟。）
 
+### 修复验证：跑通了（2026-11-01 03:45）
+
+走的是"就地旋转"这条快路：对 `per_layer_token_embd.weight`（202.8 GB、6,141,260,800 个 33 字节块）逐块把末字节挪到首位，**202.8 GB / 445 秒（456 MB/s）**，其余 306 GB 一个字节没动。然后重新打包（`pack4`，`--pack-info` exit 0）再跑冒烟：
+
+```
+$ python3 tools/dsv41/smoke.py --exe strata-dsv41 --pack pack4 --gpus 0,1 --tokens 16
+The capital of France is Paris.<|end▁of▁sentence|>
+[smoke exit: 0 after 283s]
+```
+
+`smoke.py` 的判据是"回答里必须出现 Paris"，**它过了**。这也反证了根因：只改了 Engram 的块顺序，其余权重、引擎、打包流程都没动，模型就从"第一次前向 VM fault"变成"正确回答"。
+
+至此这条链路是通的：**FP8/FP4 checkpoint → GGUF → native pack → 在 K100_AI（gfx928、wave64）上生成正确文本**。283 秒包含装载（约 130 s）与 16 个 token。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。
