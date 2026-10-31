@@ -28,10 +28,10 @@
   "patches": [
     {
       "file": "patches/0001-deepseek41-mxfp8-engram.patch",
-      "sha256": "a84779fc8e5a5f3ebfd0d3f0e1d03713d9fa821fd034713df0bbd21831228d18",
-      "bytes": 3381,
-      "what": "Engram 表以 MXFP8 写出（32 值字节 + 1 尺度字节，逐字节无损），而不是上游的 BF16",
-      "why": "strata 的 Engram reader 只收 MXFP8 / Q6_K / IQ4_NL；BF16 会在装载时报错。文件同时从 393.86 GB 降到 202.8 GB"
+      "sha256": "d59129f91e70fcd5abdf96bba2f3ac63891e569e72e9fce6152a77982e8f18f9",
+      "bytes": 3572,
+      "what": "Engram 表以 MXFP8 写出，块内顺序 [scale][32 codes]（尺度在前），逐字节无损；不是上游的 BF16",
+      "why": "strata 的 Engram reader 只收 MXFP8 / Q6_K / IQ4_NL，且按 [scale, 32 codes] 解包（ds4_engram_io.hpp:228）；BF16 会在装载时报错。文件同时从 393.86 GB 降到 202.8 GB"
     }
   ],
   "model_dir_addition": {
@@ -100,9 +100,10 @@
       "engram": "rows read on 16 threads, 256 MB row cache"
     },
     "first_forward": {
-      "result": "FAIL: GPU VMFault",
-      "detail": "prompt 0 tokens, prompt path warmed up in 233 ms, then 'Invalid address access 0x7f08a25fc000, Error code: 1' / 'KERNEL VMFault' on device 0",
-      "meaning": "gfx928(wave64) 上的内核越界；dsv41 内核按 wave32 写（lane & 31 / tid >> 5 / __shfl）"
+      "result": "FAIL: GPU VMFault + HSA workgroup error",
+      "detail": "第一次真正的前向即崩（exit 139）。1/2/17 token 的 prompt、n=1/2、单卡/双卡、DS4_ASYNC_T=1/2、--prefill-chunk 0/32 全部复现。DS4_TRACE 在崩溃后为 0 字节，说明故障在第一层路由之前（embedding / 第一层 attention）。gdb 下得到 'fatal error: not in the same workgroup as the group_leader'，是 HSA 的 workgroup/barrier 违规",
+      "correction": "早期几次『单 token 通过』是假象：--ids 的挂载把文件变成目录，引擎读到 0 个 prompt token（日志 prompt: 0 tokens in 0 ms），等于没算",
+      "meaning": "gfx928(wave64) 上的工作组/同步语义问题；dsv41 内核按 wave32（32 线程一波）写，wave64 下块内波数翻倍"
     },
     "memory_notes": [
       "--mmap-experts auto 会把 CPU 通道 244.8 GB 专家拷进内存，配 459 GB 页缓存导致 OOM（anon-rss 217 GB 时被杀）",
@@ -110,6 +111,11 @@
     ]
   },
   "clean_rebuild_verified": false,
+  "known_issues": [
+    "磁盘上的 DSV41-UNC-v3.gguf 用旧的 Engram 块顺序（[32 codes][scale]）生成，必须用本目录修正后的补丁重新生成，或对两个 Engram 张量就地做 33 字节块内旋转，否则输出是噪声",
+    "第一次前向触发 HSA workgroup 违规（not in the same workgroup as the group_leader），未修",
+    "DS4_LAUNCH_CHECK / HIP_LAUNCH_BLOCKING=1 都抓不到该故障：运行库不通过 hipGetLastError 上报"
+  ],
   "not_verified": [
     "整模型数值（首个 kernel 就越界，没有产出任何 token）",
     "视觉/多模态路径（只验证了 mmproj 的元数据与装载）",

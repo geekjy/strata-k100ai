@@ -5,9 +5,10 @@ upstream's converter loads its dense weights, opens the Engram layer and then st
 "engram.embed.weight type BF16 is not one the Engram reader handles".
 
 The checkpoint's Engram tables are e4m3 with one e8m0 scale per 32 elements, which is exactly an
-MXFP8 block (32 value bytes + 1 scale byte), so they are copied over losslessly: the upstream code
-dequantizes them to BF16 (2 bytes a value, twice the file).  gguf-py has no MXFP8 id, so the
-converter registers llama.cpp's own id (43) with its block size before writing.
+MXFP8 block, so they are copied over losslessly.  The block order is the engine's: [scale][32 codes]
+(ds4_engram_io.hpp unpacks the scale from byte 0), not [32 codes][scale].  Upstream's code dequantizes
+them to BF16 (2 bytes a value, twice the file).  gguf-py has no MXFP8 id, so the converter registers
+llama.cpp's own id (43) with its block size before writing.
 
 diff --git a/conversion/deepseek41.py b/conversion/deepseek41.py
 --- a/conversion/deepseek41.py
@@ -30,15 +31,16 @@ diff --git a/conversion/deepseek41.py b/conversion/deepseek41.py
  
  
  # Engram hash constants from inference/engram.py, stored in the GGUF: the token map needs the HF tokenizers
-@@ -237,6 +248,7 @@
+@@ -237,6 +248,8 @@
          n_rows = sum(p[2] for p in parts)
  
          def chunks() -> Iterable[np.ndarray]:
-+            # K100AI: MXFP8 blocks, lossless: the 32 e4m3 value bytes of a block followed by its e8m0 scale byte.
++            # K100AI: MXFP8 blocks, lossless: the block is [e8m0 scale][32 e4m3 code bytes], the order the engine's
++            # Engram reader unpacks (ds4_engram_io.hpp: scales from byte 0, codes from byte 1).
              from safetensors import safe_open
              for wn, sn, rows, wpart, spart in parts:
                  with safe_open(wpart, framework="pt") as fw, safe_open(spart, framework="pt") as fs:
-@@ -245,11 +257,12 @@
+@@ -245,11 +258,12 @@
                          q = ws[r0:r0 + (1 << 18)].view(torch.uint8).reshape(-1, 32)
                          e = ss[r0:r0 + (1 << 18)].view(torch.uint8).reshape(-1, 1)
                          _e8m0_check(e.numpy(), sn)
@@ -48,8 +50,8 @@ diff --git a/conversion/deepseek41.py b/conversion/deepseek41.py
 -        data = cast(np.ndarray, _StreamedBytes((n_rows, dim * (4 if self._f32 else 2)), chunks))
 -        self.gguf_writer.add_tensor(name, data, raw_dtype=qt)
 +                        out = np.empty((q.shape[0], 33), dtype=np.uint8)
-+                        out[:, :32] = q.numpy()
-+                        out[:, 32:] = e.numpy()
++                        out[:, 0:1] = e.numpy()
++                        out[:, 1:] = q.numpy()
 +                        yield out.reshape(-1)
 +        data = cast(np.ndarray, _StreamedBytes((n_rows, dim // 32 * 33), chunks))
 +        self.gguf_writer.add_tensor(name, data, raw_dtype=_MXFP8_GGML_ID)

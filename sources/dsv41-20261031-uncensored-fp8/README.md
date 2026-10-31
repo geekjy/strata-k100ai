@@ -48,7 +48,17 @@ python3 convert_hf_to_gguf.py MODEL --outfile mmproj-UNC-bf16.gguf --outtype bf1
 ds4: Engram layer 1: engram.embed.weight type BF16 is not one the Engram reader handles (MXFP8, Q6_K, IQ4_NL)
 ```
 
-原始 Engram 是 e4m3 值 + 每 32 元素一个 e8m0 尺度，**恰好就是 MXFP8 的块布局**（32 字节值 + 1 字节尺度），所以可以逐字节搬运、无损，文件还小一半（202.8 GB 对比 393.86 GB）。补丁只做两件事：给 `GGML_QUANT_SIZES` 注册 llama.cpp 自己的 MXFP8 id（43，块 32/33），以及把「反量化成 BF16」换成「值字节与尺度字节交错」。
+原始 Engram 是 e4m3 值 + 每 32 元素一个 e8m0 尺度，**恰好就是 MXFP8 的块布局**，所以可以逐字节搬运、无损，文件还小一半（202.8 GB 对比 393.86 GB）。补丁只做两件事：给 `GGML_QUANT_SIZES` 注册 llama.cpp 自己的 MXFP8 id（43，块 32/33），以及把「反量化成 BF16」换成「值字节与尺度字节交错」。
+
+**块内顺序必须是 `[scale][32 codes]`**（尺度在前）。引擎的读取端 `ds4_engram_io.hpp:228` 明写：
+
+```cpp
+for (uint32_t k = 0; k < r.n / 33; ++k) {   // [scale, 32 codes] -> codes | scales
+    r.scales[k] = src[k * 33];              // 第 0 字节当尺度
+    std::memcpy(r.dst + k * 32, src + k * 33 + 1, 32);
+```
+
+> 本目录的补丁已经是正确顺序（`out[:, 0:1] = e; out[:, 1:] = q`）。但**磁盘上那份 v3 是用错误顺序（值在前）生成的**，它的两个 Engram 张量需要按新补丁重新生成（或就地做一次 33 字节块内旋转），否则读出来的尺度/码全部错位、输出是噪声。这一点是在求解越界的过程中回头核对引擎读取端时才发现的。
 
 ### 改动 2：模型目录要有 `chat_template.jinja`
 
@@ -101,7 +111,22 @@ Invalid address access: 0x7f08a25fc000, Error code: 1
 >>>>>>>> KERNEL VMFault !!!!
 ```
 
-**装载、切分、Engram 读取、CPU 通道都正常；第一个 kernel 触发 GPU 越界访问**（Hygon 运行库的 HOSTQUEUE 报告）。这是 gfx928 的 wave64 移植问题，不是权重或打包问题——`ds4_iq_test` 的 i-quant 专家门在真卡上是 `ALL OK` 的，出问题的是后续路径（注意力 / 路由 / Engram 计算）。
+**装载、切分、Engram 读取、CPU 通道都正常；第一次真正的前向就触发 GPU 故障**。这是 gfx928 的 wave64 移植问题，不是权重或打包问题——`ds4_iq_test` 的 i-quant 专家门在真卡上是 `ALL OK` 的，出问题的是更早的那一段。
+
+### 排查记录（2026-11-01 凌晨）
+
+1. **先纠正一个假象**：早期几次"单 token 通过"是不可信的。`--ids @/tmp/ids.txt` 的挂载把宿主文件变成了目录，引擎读到 0 个 prompt token（日志里 `prompt: 0 tokens in 0 ms`），等于没算。改用**容器内**生成的 ids 文件后（1 / 2 / 17 token 三种输入、n=1/2、单卡/双卡、`DS4_ASYNC_T=1/2`、`--prefill-chunk 0/32`），**只要 prompt 是真的，第一次前向就崩**（全部 exit 139）。
+2. **崩溃点在什么阶段**：`DS4_TRACE`（每条记录写 layer/T）在崩溃后是 **0 字节**，说明故障发生在**第一层路由之前**——即 embedding / 第一层 attention 这一段，不在专家/路由/Engram 计算里。
+3. **`DS4_LAUNCH_CHECK` 与 `HIP_LAUNCH_BLOCKING=1` 都抓不到**：运行库不上报 `hipGetLastError`，故障直接以 HSA 层错误终止进程。
+4. **gdb 下拿到关键线索**：
+
+   ```
+   fatal error: not in the same workgroup as the group_leader
+   ```
+
+   这是 HSA 的 **workgroup / barrier 违规**（波前与工作组对不上），与「内核按 wave32（32 线程/波）写、在 wave64 上变成 64 线程/波」这一根因一致：某些内核的 `__syncthreads()` / LDS / 波内协作假设在半波（half-wave）语义下不成立。
+
+所以下一步不是找某个越界下标，而是**按"wave64 下工作组与同步"这个方向查**：优先看窗口/分块注意力内核里 `__syncthreads()` 与波内 shuffle/`__syncwarp` 的配合（例如 `sparse_attn_packed_kernel` 里 `warp_sum`/`warp_max` 用了 32 位掩码、而块内波数变成两倍的情形）。
 
 ## 内存上的两个坑（实测）
 
