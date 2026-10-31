@@ -155,6 +155,15 @@ write via host ptr      : no error value=42
 
 所以 `Req` 不是根因。下一步只剩这个内核自己的访问要看：`req->x[t][i]`（只有 `on_cpu` 时执行，一次 5120 个 float 写进主机内存）与 `vram[pick[r]]`。最省的一次实验是给 `on_cpu` 那个分支加一个开关、关掉它再跑：如果通过，根因就是那次批量主机写。
 
+**这两步都做了，都是阴性**（2026-11-01 04:00）：
+
+- 给内核加 `DS4_NO_REQ_X`（把 `req_x_on` 作为参数传进去，只关 `req->x` 那段批量主机写；重编 12 s）。开着和关着**都崩在同一个内核**（`ds4_kernels.cu:2131`，因为加了一行）→ 不是那次主机写。
+- `--vision off` 跑一次，**同样崩在同一个内核** → 不是视觉路由偏置 `bias_vl`（另外 `tensors.txt` 用的是 checkpoint 命名，里面根本没有 `exp_probs` 字段）。
+
+静态阅读能排除的已经排完了。下一步需要**内核内阶段标记**：往一块 device buffer 里逐步写进度（读完 logits / top-k 循环第 r 轮 / 写完 idx / 写完 req），崩溃后读回那块 buffer，就能把故障钉到具体几行。
+
+> 说明：这一轮的实验代码（`DS4_NO_REQ_X`）是在 `/work/strata` 工作树上直接改的，没有做成补丁入库——它是阴性结论的临时手段；需要复现时按上面两句改即可。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。

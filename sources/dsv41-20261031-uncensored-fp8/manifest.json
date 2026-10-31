@@ -129,8 +129,12 @@
         "host-mapped 内存不可写：微测试（gfx928，hipHostMalloc(Mapped)）里 GPU 经 device ptr 与 host ptr 写入都成功（value=42）"
       ],
       "remaining_suspects": [
-        "req->x[t][i] 的批量主机写（仅 on_cpu 时执行，一次 5120 个 float）",
-        "vram[pick[r]] 的读取"
+        "route_publish_kernel 内部剩余访问：vram[pick[r]] 的读、idx/w/plan_ptr 的写、req->ids[t][r] 的少量主机写",
+        "下一步需要内核内阶段标记（往 device buffer 里逐步写进度），静态阅读已经排除不出更多"
+      ],
+      "negative_results": [
+        "DS4_NO_REQ_X=1（只关掉 req->x 的 5120-float 批量主机写）仍然崩在同一个内核 —— 不是那次主机写",
+        "--vision off 也仍然崩在同一个内核 —— 不是视觉路由偏置 bias_vl"
       ]
     }
   },
