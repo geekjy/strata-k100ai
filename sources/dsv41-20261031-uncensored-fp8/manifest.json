@@ -158,13 +158,27 @@
         "snapshot_with_sync": "17=2, 18=2, 19=2（过了屏障、进了 top-k 局部扫描），3 仍是上一轮的 6",
         "block_size": "512 线程与 256 线程都在同一位置崩 —— 与块大小/波前数无关",
         "open": "两种解释：① 一次看似合法的共享内存读在 wave64 下出错（gdb 的 workgroup 报错支持这一方向）；② 内核已跑完、VM fault 在内核完成时异步上报，标记文件只是 2 ms 粒度的死前快照。区分办法：把所有槽位都写上调用序号，看第 2 次能否把槽 12 也写成 2"
+      },
+      "root_cause": {
+        "found": "2026-11-01T03:50+08:00",
+        "conclusion": "是我们自己的转换 bug，不是引擎移植错误：v3 的 Engram 用了错误的块顺序 [32 codes][scale]，引擎按 [scale][32 codes] 读 → 指数溢出成 inf/NaN → 层 1 的输入变 NaN → 路由器 top-k 对 NaN 恒 false、bix 保持 INT_MAX → vram[INT_MAX] 越界读 → VM fault",
+        "evidence": {
+          "traced_slots": "inv 2 走过 entered/preload/barrier/top-k 6 轮/循环结束/分母/before-pick-writes，断在第一组 idx/w/plan_ptr 写",
+          "slot20_vram_not_null": 1,
+          "slot21_pick0_low16": 65535,
+          "slot22_pick0_in_range": 0,
+          "meaning": "pick[0] = 0x7FFFFFFF = INT_MAX"
+        },
+        "why_layer1": "第 2 次调用是层 1，engram_layer_ids = 1,14；层 0 没有 Engram，所以完好",
+        "fix": "patches/0001 已把块顺序改成 [scale][32 codes]，只需把磁盘上的 v3 按新补丁重新生成（或对两个 Engram 张量做 33 字节块内旋转），再重新打包",
+        "status": "fix 已就绪，尚未重跑"
       }
     }
   },
   "clean_rebuild_verified": false,
   "known_issues": [
-    "磁盘上的 DSV41-UNC-v3.gguf 用旧的 Engram 块顺序（[32 codes][scale]）生成，必须用本目录修正后的补丁重新生成，或对两个 Engram 张量就地做 33 字节块内旋转，否则输出是噪声",
-    "第一次前向触发 GPU VMFault。launch 探针定位到 route_publish_kernel，内核内标记进一步显示：第 1 次调用完整跑完，第 2 次调用死在 logits/bias 预载段。内核本身没问题，坏的是第二次调用拿到的缓冲，未修",
+    "磁盘上的 DSV41-UNC-v3.gguf 用旧的 Engram 块顺序（[32 codes][scale]）生成，必须用本目录修正后的补丁重新生成，或对两个 Engram 张量就地做 33 字节块内旋转，否则输出是噪声；**这个错误同时也是首次前向 VM fault 的根因**（NaN 输入 → top-k 选中 INT_MAX → vram[INT_MAX] 越界）",
+    "首次前向的 VM fault 已定位到根因（见 validation.root_cause），修复只差重新生成 Engram；尚未重跑验证",
     "DS4_LAUNCH_CHECK / HIP_LAUNCH_BLOCKING=1 单用都抓不到该故障：运行库不通过 hipGetLastError 上报，需要在查错前同步（见 patches/0002）"
   ],
   "not_verified": [

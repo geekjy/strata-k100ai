@@ -216,6 +216,39 @@ started 2 / finished 1 / running 2
 
 区分办法：把**所有**槽位都写上调用序号（现在只有 1/2/3/6/12 这些槽是常量），如果第 2 次调用能把 `12` 也写成 2，就说明内核跑完了、问题在完成时；否则才是在扫描里。
 
+### 根因：Engram 块顺序写错 → 层 1 的输入变成 NaN → 路由器一个专家都没选 → `vram[INT_MAX]`（2026-11-01 03:50）
+
+把所有槽位都编上调用序号后，第 2 次调用走过的槽位是：`entered → preload → barrier → top-k 6 轮 → 循环结束 → 分母 → before-pick-writes`，**断在写 `idx`/`w`/`plan_ptr` 的第一组**（槽 9 仍属于第 1 次调用）。
+
+再插三个槽就锁死了：
+
+```
+slot 20 (vram 非空?)        inv 2 → 1        ← 表指针正常
+slot 21 (pick[0] & 0xffff)  inv 2 → 65535    ← pick[0] = 0x7FFFFFFF = INT_MAX
+slot 22 (pick[0] 在 [0,n)?)  inv 2 → 0        ← 不在范围
+```
+
+链条：
+
+1. 第 2 次调用是**层 1**，而层 1 是 **Engram 层**（`engram_layer_ids = 1,14`）；
+2. 该次调用的 top-k **一个专家都没选中**——`bix` 保持初值 `INT_MAX`（低 16 位正是 `65535`）；
+3. 于是 `plan_ptr[...] = vram[INT_MAX]` → 越界读 → **VM fault**；
+4. 为什么全不选：`bs[i] = sc[i] + bias[i]` 全是 NaN/inf，而 top-k 的比较对 NaN 恒为 false；
+5. NaN 的来源：**层输入 `d.x` 被 Engram 污染** —— 磁盘上那份 v3 的 Engram 是用**错误块顺序**（`[32 codes][scale]`）写的，引擎按 `[scale][32 codes]` 读，把尺度字节当 e4m3 值、把数据字节当 e8m0 指数（`2^(byte-127)`，最大 `2^128`）→ 溢出成 inf/NaN。
+
+**所以这次崩溃是转换侧的 bug 造成的，不是引擎移植错误。** 修正已经在 `patches/0001`（`[scale][32 codes]`）里了，只差把磁盘上的 v3 重新生成。
+
+修复步骤（下一步）：
+
+```bash
+# 用修正后的补丁重跑转换（约 26 分钟），然后重新打包、重新跑
+python3 convert_hf_to_gguf.py MODEL --outfile DSV41-UNC-v4.gguf --outtype bf16
+python3 tools/dsv41/pack_gguf.py --model <dir> --shards DSV41-UNC-v4.gguf --dspark-gguf ... --mmproj ... \
+        --dspark-noise-token 128799 --out <dir>/pack4
+```
+
+（也可以只对两个 Engram 张量做 33 字节块内旋转，省掉 26 分钟的整模型重转：读 200 GB、写回 200 GB，约 5 分钟。）
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。
