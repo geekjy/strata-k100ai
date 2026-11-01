@@ -252,7 +252,7 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "FUNKTIONIERT (korrekte Ausgabe), Geschwindigkeitsvorteil aber NICHT Belegt - Messrauschen zu gross",
+      "status": "FUNKTIONIERT und laeuft (beide Karten rechnen jede Schicht), bringt aber KEINEN Geschwindigkeitsvorteil - Produktion bleibt auf der Baseline",
       "measured": {
         "member1_moe_out": "war exakt 0 (alle Picks des Tokens lagen im Bereich von Member 0)",
         "ein_token_prompt": "Basis 223,301,51957,343,... vs Expert-TP 643,671,671,671,... - der Fehler tritt schon beim ersten erzeugten Token auf, also im T=1-Decode-Pfad, nicht im Mehrfenster-Prompt"
@@ -337,7 +337,21 @@
         "DS4_ATTN_SPLIT": "wird wirklich genommen - prelog zeigt ds4_attn_split.cuh:202/203 je 80 Starts statt ds4_kernels.cu:2577/2585; messbar kein Gewinn",
         "DS4_FAST_ATTN": "laut Quelle nur fuer den Chunk-Pfad (Prompts ueber 96 Token); im A/B kein belastbarer Gewinn",
         "DS4_MTP_vs_DSpark": "in diesem Engine EIN Subsystem: ds4_model.hpp sagt 'dspark: load the DSpark drafter (the checkpoint's mtp.* blocks)'; if (!o.dspark) g.n_mtp = 0"
-      }
+      },
+      "smoking_gun_parallelism": {
+        "method": "hy-smi während einer echten Generierung (500 Token), 2 s Takt",
+        "baseline": "abwechselnd: eine Karte 95-100 %, die andere 0 % (Schicht-Split)",
+        "expert_tp": "beide Karten gleichzeitig 20-100 %, Leistung gleichzeitig 250-330 W (z. B. 80.8 %/325 W und 89.2 %/318 W)",
+        "conclusion": "die Parallelitaet ist real erreicht - das war das Ziel"
+      },
+      "fair_ab": {
+        "protocol": "Server dauerhaft, 3 Anfragen je Konfiguration à 300 Token, Median; Auswahl der Konfiguration über den Prozess im Container verifiziert",
+        "baseline_layer_split": "26.59 / 27.79 / 26.46 -> Median 26.59 tok/s",
+        "expert_tp": "22.88 / 28.12 / 31.94 -> Median 28.12 tok/s",
+        "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
+      },
+      "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
+      "production": "zurueck auf der Baseline (build-dsv41-full, layer split), health 200, Median ~26.6 tok/s"
     }
   },
   "clean_rebuild_verified": false,
