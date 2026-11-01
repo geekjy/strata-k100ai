@@ -256,6 +256,18 @@
       "decode_tok_s": "10.4-11.0",
       "bottleneck": "lm head：1.32 GB 在主机内存，每 token 经 PCIe 读一遍，78-86 ms（~90% 的 token 时间）",
       "notes": "ggml 里 IQ2_XXS = 16、IQ4_NL = 20（写错类型号会让引擎按 IQ4_NL 读，smoke 段错误）；IQ2_XXS 强制要 imatrix，这里用全 1（不加权最小二乘）"
+    },
+    "pack6-iq2xxs-q6k": {
+      "what": "专家 IQ2_XXS（140.1 GB）+ 稠密注意力投影 Q6_K（5.37 GB）+ Engram MXFP8 + head/embed BF16",
+      "size_gb": 352.03,
+      "smoke": "The capital of France is Paris.<|end▁of▁sentence｜>  (exit 0, 162 s)",
+      "experts_in_vram_pct": 85,
+      "dense_per_card_gb": 4.24,
+      "attention_ms": 27.06,
+      "gpu_per_token_ms": 69.44,
+      "decode_tok_s": "13.17 (24 tok) / 15.97 (64 tok)",
+      "head_measured_ms": "4.4-4.8 (event pair around the head matvec; DS4_HEAD_TIME=1)",
+      "notes": "indexer.weights_proj 必须留 F16（引擎 ds4_model.cu:1856）；head wait 是排空整条流的时间，不是 head 内核"
     }
   }
 }

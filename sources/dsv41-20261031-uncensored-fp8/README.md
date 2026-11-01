@@ -358,6 +358,39 @@ smoke 通过：`The capital of France is Paris.<|end▁of▁sentence｜>`，exit
 
 下一步要提速只能动 head：把它量化到 Q6_K（引擎的 `mat()` 支持 BF16/Q8_0/Q4_K/Q5_K/Q6_K，1.32 → 1.03 GB），或者让它在两张卡上切分（pack4 的 TP2 模式就是这么做的，78 → ~40 ms），后者需要在引擎里给 head 单独建跨卡组。
 
+### 稠密权重 Q6_K：attention 减半，15.97 tok/s（2026-11-01 15:10）
+
+先量清了 head 的真实成本：加一对 event 在 head 的 matvec 前后（`DS4_HEAD_TIME=1`）——
+
+```
+K100AI-PROBE head 4.59 / 4.37 / 4.44 / 4.75 / 4.42 / 4.59 / 4.42 / 4.54 ms
+```
+
+**只有 4.5 ms/token**。之前那个 `head wait 78-95 ms` 是 `cudaStreamSynchronize` 排空**整条流**的时间，不是 head 内核——我上一轮的归因错了。跨卡切分 head 最多省 2 ms，不值得动引擎。
+
+真正的账单是 attention：60 ms（66%），读 17.5 GB BF16 稠密权重。
+
+所以把**注意力投影 + 共享专家的矩阵从 BF16 转到 Q6_K**（`tools/requant_gguf_tensor.cpp` 支持 MXFP4→IQ2_XXS 与 BF16→Q6_K 两种；`tools/ds4_requant_gguf2.py --mode dense --target Q6_K`）。
+
+只转带宽真正吃紧的那批：`attn_q_a/q_b/kv/output_a/output_b` + `ffn_{gate,up,down}_shexp` + `attn_compressor_{kv,gate}`，共 335 个张量、13.08 GB → 5.37 GB。**`indexer.weights_proj` 必须留 F16**（引擎的 `ds4_model.cu:1856` 硬性要求，转成 Q6_K 会报 `not an F16 tensor in the pack`），head 与 embedding 也保持 BF16。转换 11 秒，组装 12.9 分钟。
+
+结果（pack6）：
+
+| 每 token | pack5（稠密 BF16） | **pack6（稠密 Q6_K）** |
+|---|---|---|
+| 每卡稠密权重 | 8.10 GB | **4.24 GB** |
+| 专家在显存 | 79% | **85%**（13000/15360） |
+| **attention** | 59.75 ms | **27.06 ms** |
+| routing + shared | 15.57 ms | 9.41 ms |
+| 等 CPU 通道 | 1.24 ms | 0.40 ms |
+| GPU 合计 | 86.71 ms | **69.44 ms** |
+| **decode（24 token）** | 10.13–11.14 tok/s | **13.17 tok/s** |
+| **decode（64 token）** | 9.81 tok/s | **15.97 tok/s** |
+| 装载 | 152.5 s | 149.7 s |
+| smoke | 163 s | **162 s**（Paris 正确） |
+
+从 pack4 到这里：**9.84 → 15.97 tok/s（+62%）**，体积 508 → 352 GB，attention 78.56 → 27.06 ms。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。
