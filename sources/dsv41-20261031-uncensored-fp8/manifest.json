@@ -252,7 +252,7 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "FUNKTIONIERT - TP2 nach Experten-Index liefert korrekte Ausgabe",
+      "status": "FUNKTIONIERT (korrekte Ausgabe), Geschwindigkeitsvorteil aber NICHT Belegt - Messrauschen zu gross",
       "measured": {
         "member1_moe_out": "war exakt 0 (alle Picks des Tokens lagen im Bereich von Member 0)",
         "ein_token_prompt": "Basis 223,301,51957,343,... vs Expert-TP 643,671,671,671,... - der Fehler tritt schon beim ersten erzeugten Token auf, also im T=1-Decode-Pfad, nicht im Mehrfenster-Prompt"
@@ -263,7 +263,7 @@
         "token_match": "32 Token: die ersten 13 Token identisch mit der Basis (671,6102,294,8760,344,11111,16,1,3227,28,6102,294,8760); danach nur die bekannte Streuung der CPU-Lane",
         "gate_up_readback": "nach dem Fix echte Werte (z. B. -0.0139 -0.0115 -0.0027 -0.0638), 1 von 80 Aufrufen null (der Fall, in dem alle Picks dem Peer gehoeren)"
       },
-      "next": "in iq::gate_up selbst messen: wie viele Gruppen bestehen die group()-Pruefung, und wohin schreibt der Kernel (ia.h / ia.tr Offsets). Alternativ die Zeilenindizes pruefen, die der Down danach liest (e * n_ff)",
+      "next": "richtige Messung: Server einmal starten, mehrere Anfragen je Konfiguration, Median; oder --n 256 mit 5 Wiederholungen. Erst danach ueber Produktion entscheiden",
       "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
       "bisected": {
         "method": "DS4_DUMP_L (jede Schicht) und DS4_DUMP_S (Unterschritte von Layer 0), Basis gegen Experiment",
@@ -327,6 +327,16 @@
         "dspark_off": "Expert-TP 23.0-24.1 tok/s gegen Basis 18.0-19.2 (+20..34%)",
         "dspark_on": "Expert-TP 22.11 tok/s gegen Basis 21.81 - mit DSpark fast kein Gewinn mehr",
         "prompt": "37.2 gegen 35.0 tok/s"
+      },
+      "speed_claims_retracted": {
+        "reason": "interleaved A/B, je 3 Paare, 64 Token, DSpark an, Basis-Binary: plain/split = 25.26/26.05, 22.82/19.94, 26.49/24.17; plain/fast = 17.88/23.85, 23.05/19.14. Die Vorzeichen wechseln, die Effekte liegen im Rauschen von +-4 bis 6 tok/s",
+        "consequence": "die frueheren Angaben +20..34% (ohne DSpark) und +1.4% (mit DSpark) sind NICHT belastbar - Streuung von +-20..30% zwischen Laeufen derselben Konfiguration (z. B. base_plain 17.40, 23.16, 25.26, 22.82, 26.49)",
+        "what_still_holds": "die Ausgabe ist korrekt (smoke 'The capital of France is Paris.', 13 Token identisch mit der Basis), und strukturell rechnen beide Karten jede Schicht (CUDA0/1 layers [0,39] part 0/1)"
+      },
+      "attention_accelerators_checked": {
+        "DS4_ATTN_SPLIT": "wird wirklich genommen - prelog zeigt ds4_attn_split.cuh:202/203 je 80 Starts statt ds4_kernels.cu:2577/2585; messbar kein Gewinn",
+        "DS4_FAST_ATTN": "laut Quelle nur fuer den Chunk-Pfad (Prompts ueber 96 Token); im A/B kein belastbarer Gewinn",
+        "DS4_MTP_vs_DSpark": "in diesem Engine EIN Subsystem: ds4_model.hpp sagt 'dspark: load the DSpark drafter (the checkpoint's mtp.* blocks)'; if (!o.dspark) g.n_mtp = 0"
       }
     }
   },
