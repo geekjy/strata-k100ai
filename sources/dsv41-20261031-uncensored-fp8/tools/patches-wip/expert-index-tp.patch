@@ -188,7 +188,30 @@
                          ok = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(l), l.nm > 1 ? stage2 : stage,
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
-@@ -10399,8 +10469,11 @@
+@@ -8374,11 +8444,17 @@
+         CK(cudaMemcpyAsync(c.bounds_pin, c.bounds, (size_t) (n_vs + 1) * 4, cudaMemcpyDeviceToHost, s));
+         prof_mark(d, 10);
+         // the shared expert into acc while the host waits for the bounds
+-        if (!gemm(d, c, l.s1, c.x16, D, T, c.sg, FF, 0.0f, err) || !gemm(d, c, l.s3, c.x16, D, T, c.su, FF, 0.0f, err))
+-            return false;
+-        swiglu(c.sg, c.su, T * FF, g.lim, c.sg, s);
+-        x3::rows_f16(c.sg, FF, nullptr, T, FF, c.sh16, s);
+-        if (!gemm(d, c, l.s2, c.sh16, FF, T, c.acc, D, 0.0f, err)) return false;
++        if (expert_tp_on() && mi != 0) {
++            // K100AI-EXPTP: each member holds the whole shared expert, so only the lead seeds acc with it -
++            // acc is all-reduced below, and every member's copy would be counted
++            CK(cudaMemsetAsync(c.acc, 0, (size_t) T * D * 4, s));
++        } else {
++            if (!gemm(d, c, l.s1, c.x16, D, T, c.sg, FF, 0.0f, err) || !gemm(d, c, l.s3, c.x16, D, T, c.su, FF, 0.0f, err))
++                return false;
++            swiglu(c.sg, c.su, T * FF, g.lim, c.sg, s);
++            x3::rows_f16(c.sg, FF, nullptr, T, FF, c.sh16, s);
++            if (!gemm(d, c, l.s2, c.sh16, FF, T, c.acc, D, 0.0f, err)) return false;
++        }
+         prof_mark(d, 2);
+         // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
+         // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
+@@ -10399,8 +10475,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -202,7 +225,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10501,9 @@
+@@ -10428,7 +10507,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;

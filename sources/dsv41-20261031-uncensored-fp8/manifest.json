@@ -252,7 +252,7 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "WIP - TP2 +25%, Fehler auf die MoE-Stufe eingegrenzt; 4 Fixversuche ohne Wirkung",
+      "status": "WIP - TP2 +20-25%, Ausgabe falsch; 5 Fixversuche nachweislich ausgefuehrt, aber wirkungslos",
       "measured": {
         "baseline_layer_split": "decode 18.03 tok/s (32 tok), prompt 30.82",
         "expert_tp": "decode 22.55 tok/s (+25%), prompt 36.09",
@@ -261,7 +261,7 @@
       },
       "build_env_gotcha": "der experimentelle Build braucht dieselben CMAKE_HIP_FLAGS wie die Baseline: --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false. Ohne sie ist sogar der Feature-OFF-Pfad degradiert und nicht-deterministisch",
       "verified": "mit den richtigen Flags: Feature OFF -> 'The capital of France is Paris.' (identisch zur Baseline)",
-      "next": "Ring-/Fensterpfad: die gestreamten Experten muessen nach 'gehoert diesem Member' liegen (run_set bekommt fuer fremde Experten bounds 0)",
+      "next": "die Experten-Daten selbst pruefen: win_moe_out je Member dumpen und gegen die Baseline-Summe stellen (Baseline mit --threads = nm 1). Stimmt member0+member1 nicht mit der Baseline ueberein, liegt es an den Gewichten/Offsets der Experten, nicht an der Addition",
       "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
       "bisected": {
         "method": "DS4_DUMP_L (jede Schicht) und DS4_DUMP_S (Unterschritte von Layer 0), Basis gegen Experiment",
@@ -281,7 +281,13 @@
         "Shared Expert nur vom Lead: Fenster-Pfad (wa.sh_out)"
       ],
       "why_no_effect": "der Prompt laeuft laut Log auch mit tp=2 durch den CHUNK-Pfad ('windows of 8192'), nicht durch den Fenster-Pfad; die Chunk-MoE bei nm>1 geht ueber run_set -> iq_set/gg::set, und dort gibt es kein sh_out-Feld. Wo der Shared Expert in diesem Pfad addiert wird, ist noch nicht gefunden - das ist der naechste Punkt",
-      "verified_build": "die Experiment-Binaries sind frisch (Objektzeit > Quellezeit), die Aenderungen sind also wirklich drin"
+      "verified_build": "die Experiment-Binaries sind frisch (Objektzeit > Quellezeit), die Aenderungen sind also wirklich drin",
+      "trace_result": {
+        "method": "temporaere stderr-Marker in den gepatchten Zweigen, DS4_EXPTP_TRACE=1, ein Token",
+        "chunk_shared_expert": "0 Treffer - der Chunk-Pfad laeuft fuer 17 Prompt-Token gar nicht (unter 96 Token nimmt der Engine die Fenster)",
+        "token_moe_down": "80 Treffer = 2 Member x 40 Schichten - der Decode ist also wirklich gesplittet",
+        "conclusion": "der Prompt laeuft im Fenster-Pfad; die fuenf Fixversuche sitzen in Zweigen, die zwar ausgefuehrt werden, die Ausgabe aber byte-identisch lassen. Der Fehler liegt tiefer als der Shared Expert"
+      }
     }
   },
   "clean_rebuild_verified": false,
