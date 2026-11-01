@@ -250,6 +250,25 @@
       "only_types_allowing_tp2": "32 值块的那些：MXFP4 4.25 bpw（289 GB）、Q4_0/IQ4_NL 4.5 bpw（306 GB）——都装不进 128 GB 显存，会退回 CPU 通道（pack4 实测 9.84 tok/s）",
       "cross_token_pipelining": "不可行：自回归依赖 + DSpark 的 draft 只覆盖同一轮的验证，下一轮 draft 依赖上一轮接受结果",
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
+    },
+    "expert_index_tp": {
+      "status": "WIP (stufe 1 von 3) - laeuft nicht durch",
+      "goal": "TP2 mit den vorhandenen IQ2_XXS/Q6_K Gewichten: jeder Member haelt seine eigenen Experten ganz (kein n_ff-Split), der Router traegt einen Sentinel fuer die des anderen, die Summe macht das vorhandene allreduce",
+      "done": [
+        "DS4_EXPERT_TP Gate; die tp-Blockpruefung uebersprungen (ds4_model.cu:2211)",
+        "Layer: e0/en je Member; hlay=lay, hblob=blob (ganze Experten)",
+        "Arena je Member: en Slots; slot[] je Besitzer; vram_tab mit ~0ull-Sentinel",
+        "Loader: ein Experte geht nur zu seinem Besitzer, ohne blob_to_half",
+        "mx_group: p == 0ull oder ~0ull -> ueberspringen"
+      ],
+      "blockers": [
+        "getroffen: layers.0.ffn.shared_experts.w2: 2304 inputs do not split in 2 parts - der Shared Expert wird im klassischen TP per n_ff geteilt, Q6_K hat aber 256er Bloecke",
+        "offen: der Shared Expert landet in moe_out und wird vom allreduce mitgezaehlt - bei expert-index TP muss er NACH dem allreduce addiert werden (oder nur vom Lead berechnet)",
+        "offen: Prompt-/Fensterpfad (T>1) und zc_stage lesen plan_ptr ebenfalls",
+        "offen: CPU-Lane-Auswahl darf die Experten des Partners nicht nehmen"
+      ],
+      "files": "strata-exp/src/dsv41/ds4_model.cu (+56), ds4_gguf.cu (+9)",
+      "build": "/work/build-exp baut (23.48 MB), Start bricht an den Shared-Expert-Check ab"
     }
   },
   "clean_rebuild_verified": false,
