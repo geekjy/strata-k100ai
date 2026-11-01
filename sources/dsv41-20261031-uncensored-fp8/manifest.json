@@ -231,6 +231,17 @@
         "single_round_trip_variant": "DS4_AR_REP=1（每个成员直接读对端整行、按固定成员顺序求和，1 次往返代替 2 次）：6.30 -> 6.81 tok/s，down+post 103.00 -> 92.75 ms，只值 ~8%",
         "note": "DS4_AR_OFF=1 时整体 decode 反而从 5.50 掉到 4.58 tok/s（CPU 通道等待 118 -> 158），说明这 120 ms 有时被 CPU 通道等待掩盖"
       }
+    },
+    "dspark": {
+      "what": "DSpark（= 这份 checkpoint 的 mtp.* 块，MTP 与 DSpark 是同一件事）在 pack6 上通过了显存闸",
+      "why_now": "闸是 exp_b > 1.5 * room_b；专家从 288.8 GB 降到 140.1 GB 后过闸，之前的日志是 'DSpark not loaded: the routed experts (289 GB) are far more than the GPU holds (133 GB)'",
+      "measured": {
+        "--dspark none": "13.17 tok/s (24 tok) / 15.97 tok/s (64 tok)",
+        "--dspark auto": "20.07 tok/s (32 tok)",
+        "--dspark on": "21.81 tok/s (32 tok)"
+      },
+      "drafter_stats": "21 rounds, 16 drafts offered, 10 accepted (1.52 tokens a round), drafting 15.1-15.3 ms a round",
+      "serve": "serve.json 现在用 --dspark on，并去掉了 reasoning_effort / reasoning_budget_tokens（按用户要求用默认）"
     }
   },
   "clean_rebuild_verified": false,

@@ -1,8 +1,6 @@
 {
   "exe": "/4T-02/strata-work/build-dsv41-full/strata-dsv41",
-  "args": ["--pack", "/4T-02/dsv41-conv/pack4", "--gpus", "0,1", "--mmap-experts", "on"],
+  "args": ["--pack", "/4T-02/dsv41-conv/pack6", "--gpus", "0,1", "--mmap-experts", "on", "--dspark", "on"],
   "cwd": "/4T-02/strata-work",
-  "model_name": "DeepSeek-V4.1-Flash-1017 (FP8 checkpoint, MXFP4 experts, MXFP8 engram)",
-  "reasoning_effort": "low",
-  "reasoning_budget_tokens": 512
+  "model_name": "DeepSeek-V4.1-Flash-1017 (IQ2_XXS experts + Q6_K dense, DSpark on)"
 }
