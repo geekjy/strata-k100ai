@@ -252,16 +252,14 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "WIP - TP2 +20-25%, Ausgabe falsch; 5 Fixversuche nachweislich ausgefuehrt, aber wirkungslos",
+      "status": "WIP - TP2 +27%, Ausgabe falsch; Fehler im T=1-Pfad (Ein-Token-Prompt reproduziert ihn sofort)",
       "measured": {
-        "baseline_layer_split": "decode 18.03 tok/s (32 tok), prompt 30.82",
-        "expert_tp": "decode 22.55 tok/s (+25%), prompt 36.09",
-        "residency": "6281 Experten je Karte (12562/15360 = 82%), 57.46 GB; CPU-Lane 32 von 1680 Picks je Token",
-        "output": "expert_tp: 16,455,6102,294,8760,33,9361,295,834,3107,10175,16,455,... (11-Token-Zyklus); Baseline: 671,6102,294,8760,344,..."
+        "member1_moe_out": "war exakt 0 (alle Picks des Tokens lagen im Bereich von Member 0)",
+        "ein_token_prompt": "Basis 223,301,51957,343,... vs Expert-TP 643,671,671,671,... - der Fehler tritt schon beim ersten erzeugten Token auf, also im T=1-Decode-Pfad, nicht im Mehrfenster-Prompt"
       },
       "build_env_gotcha": "der experimentelle Build braucht dieselben CMAKE_HIP_FLAGS wie die Baseline: --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false. Ohne sie ist sogar der Feature-OFF-Pfad degradiert und nicht-deterministisch",
       "verified": "mit den richtigen Flags: Feature OFF -> 'The capital of France is Paris.' (identisch zur Baseline)",
-      "next": "die Experten-Daten selbst pruefen: win_moe_out je Member dumpen und gegen die Baseline-Summe stellen (Baseline mit --threads = nm 1). Stimmt member0+member1 nicht mit der Baseline ueberein, liegt es an den Gewichten/Offsets der Experten, nicht an der Addition",
+      "next": "im T=1-Pfad die Head-Gather-Stufe pruefen (head_cols / d.logits_part / G.lg_stage) und die logits nach dem Gather gegen die Basis stellen - das ist der einzige Schritt im T=1-Pfad, der noch nicht verglichen wurde",
       "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
       "bisected": {
         "method": "DS4_DUMP_L (jede Schicht) und DS4_DUMP_S (Unterschritte von Layer 0), Basis gegen Experiment",
@@ -287,7 +285,16 @@
         "chunk_shared_expert": "0 Treffer - der Chunk-Pfad laeuft fuer 17 Prompt-Token gar nicht (unter 96 Token nimmt der Engine die Fenster)",
         "token_moe_down": "80 Treffer = 2 Member x 40 Schichten - der Decode ist also wirklich gesplittet",
         "conclusion": "der Prompt laeuft im Fenster-Pfad; die fuenf Fixversuche sitzen in Zweigen, die zwar ausgefuehrt werden, die Ausgabe aber byte-identisch lassen. Der Fehler liegt tiefer als der Shared Expert"
-      }
+      },
+      "found_and_fixed": [
+        "vram_tab hatte nur zwei Zustaende: eigene nicht-residente Experten wurden als 'Peer' markiert -> niemand rechnete sie. Jetzt drei Zustaende (Zeiger / CPU-Lane / Peer), Trace: own 158 peer 192 cpu 34 je Member",
+        "CPU-Lane-Fallback: alles, was in keines Members VRAM liegt, geht an die CPU-Lane (vorher nur die des Leads)"
+      ],
+      "ruled_out": [
+        "Attention und Residualstrom von Layer 0 (bis 1e-07 gleich)",
+        "Combine-Sentinel, Ganz-Experte im Streaming, Shared Expert in allen drei Pfaden (Token/Fenster/Chunk), CPU-Lane-Fallback",
+        "Chunk-Pfad: laeuft fuer Prompts unter 96 Token gar nicht"
+      ]
     }
   },
   "clean_rebuild_verified": false,
