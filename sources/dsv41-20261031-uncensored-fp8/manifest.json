@@ -352,9 +352,7 @@
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
-        "state": "laeuft auf dem parallelen Build (build-exp, DS4_EXPERT_TP=7, --tp 2, --dspark auto)",
-        "verified": "kurze Anfrage 'The capital of France is Paris.'; lange Anfrage 1479 Prompt-Token + 87 Completion ohne Fehler",
-        "caveat": "Prefill bei langen Prompts ~38% langsamer als die Baseline",
+        "state": "build-exp/strata-dsv41 --tp 2 --dspark on, DS4_EXPERT_TP=7, health 200",
         "revert": "bash /4T-02/strata-work/serve_rs2.sh"
       },
       "api_failure_fixed": {
@@ -366,7 +364,29 @@
       "prefill_regression": {
         "measured": "1700-Token-Prompt: Experten-TP 79.50 tok/s gegen Baseline 128.14 tok/s (-38%); Decode 20.06 gegen 17.66",
         "why": "der Chunk-Pfad streamt die nicht-residenten Experten und synchronisiert die Karten je Schicht - bei langen Prompts kostet das mehr, als die Parallelitaet bringt"
-      }
+      },
+      "optimization_2_shared_expert": {
+        "what": "der Shared Expert wird nur noch beim Lead geladen UND gerechnet; der Nicht-Lead ueberspringt beides",
+        "why": "nur der Lead addiert ihn zum Schicht-Ausgang, der Nicht-Lead rechnete ihn umsonst und hielt 1.16 GB dafuer",
+        "freed_vram": "Nicht-Lead weights 5.21 -> 4.05 GB, frei 772 MiB -> 2922 MiB",
+        "gotcha": "gg::mv lehnt einen Job mit fmt == 0 ab (Rueckgabe false), deshalb muessen Laden und Rechnen zusammen entfallen; der Lead behaelt np=1 (sonst kollidiert es mit dem 256er-Block-Check von Q6_K)"
+      },
+      "dspark_now_fits": {
+        "before": "im Experten-TP nie geladen (kein Platz)",
+        "now": "laedt und laeuft: 22 Runden, 18 Drafts, 9 akzeptiert (1.45 Token je Runde), Drafting 40.71 ms je Runde",
+        "cost": "die Residency faellt dafuer von 6281 auf 5723 Experten je Karte"
+      },
+      "measured_server_protocol": {
+        "protocol": "Server dauerhaft, 3 Anfragen a 300 Token, Median, Konfiguration ueber den Prozess verifiziert",
+        "expert_tp_dspark_on": "32.73 / 34.06 / 30.16 -> Median 32.73 tok/s",
+        "baseline_layer_split": "25.89 / 34.17 / 27.31 -> Median 27.31 tok/s",
+        "delta": "+20 % auf den Medianen; die Verteilung des Experten-TP ist enger und hoeher (Minimum 30.16 gegen 25.89)"
+      },
+      "quality_verified": [
+        "'The capital of France is Paris.'",
+        "kohaerente Python-Antwort",
+        "1479-Token-Prompt: 2.6 s, korrekte Zusammenfassung, kein Fehler"
+      ]
     }
   },
   "clean_rebuild_verified": false,

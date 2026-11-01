@@ -111,23 +111,26 @@
                  const int t2 = gg::expert_type(l.lay, 2);
                  const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
                  CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
-@@ -4328,9 +4361,12 @@
+@@ -4328,9 +4361,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
 -                      mat(d, P + "ffn.shared_experts.w1", l.s1, err, acct, mi, nm, true, l.il % nm) &&
 -                      mat(d, P + "ffn.shared_experts.w2", l.s2, err, acct, mi, nm, false, l.il % nm) &&
 -                      mat(d, P + "ffn.shared_experts.w3", l.s3, err, acct, mi, nm, true, l.il % nm);
-+                      mat(d, P + "ffn.shared_experts.w1", l.s1, err, acct, expert_tp_on() ? 0 : mi,
-+                          expert_tp_on() ? 1 : nm, true, l.il % nm) &&
-+                      mat(d, P + "ffn.shared_experts.w2", l.s2, err, acct, expert_tp_on() ? 0 : mi,
-+                          expert_tp_on() ? 1 : nm, false, l.il % nm) &&
-+                      mat(d, P + "ffn.shared_experts.w3", l.s3, err, acct, expert_tp_on() ? 0 : mi,
-+                          expert_tp_on() ? 1 : nm, true, l.il % nm);
++                      // K100AI-EXPTP: only the lead adds the shared expert to the layer's output, so only the
++                      // lead holds it (gg::mv rejects a zero-format job, hence the load and the compute skip together)
++                      ((expert_tp_on() && mi != 0) ||   // (the non-lead has no use for it)
++                       (mat(d, P + "ffn.shared_experts.w1", l.s1, err, acct, expert_tp_on() ? 0 : mi,
++                            expert_tp_on() ? 1 : nm, true, l.il % nm) &&
++                        mat(d, P + "ffn.shared_experts.w2", l.s2, err, acct, expert_tp_on() ? 0 : mi,
++                            expert_tp_on() ? 1 : nm, false, l.il % nm) &&
++                        mat(d, P + "ffn.shared_experts.w3", l.s3, err, acct, expert_tp_on() ? 0 : mi,
++                            expert_tp_on() ? 1 : nm, true, l.il % nm)));
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4684,20 @@
+@@ -4648,6 +4687,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -148,7 +151,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4764,22 @@
+@@ -4714,6 +4767,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -171,7 +174,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4859,18 @@
+@@ -4793,9 +4862,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -192,7 +195,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4916,10 @@
+@@ -4841,9 +4919,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -205,7 +208,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5329,7 @@
+@@ -5253,7 +5332,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -214,7 +217,7 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8374,11 +8450,17 @@
+@@ -8374,11 +8453,17 @@
          CK(cudaMemcpyAsync(c.bounds_pin, c.bounds, (size_t) (n_vs + 1) * 4, cudaMemcpyDeviceToHost, s));
          prof_mark(d, 10);
          // the shared expert into acc while the host waits for the bounds
@@ -237,7 +240,23 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -10399,8 +10481,11 @@
+@@ -10360,9 +10445,12 @@
+             route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
+                           d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
+                           na[1], l.il);
+-            if (!mv(d, {job(l.s1, d.x, d.sg, T, D, FF), job(l.s3, d.x, d.su, T, D, FF)}, err)) return false;
+-            swiglu(d.sg, d.su, T * FF, g.lim, d.sh, s);
+-            if (!mv(d, {job(l.s2, d.sh, d.sh_out, T, FF, D)}, err)) return false;
++            // K100AI-EXPTP: a member without the shared expert skips its three GEMVs (its sh_out is unused)
++            if (!expert_tp_on() || d.mi == 0) {
++                if (!mv(d, {job(l.s1, d.x, d.sg, T, D, FF), job(l.s3, d.x, d.su, T, D, FF)}, err)) return false;
++                swiglu(d.sg, d.su, T * FF, g.lim, d.sh, s);
++                if (!mv(d, {job(l.s2, d.sh, d.sh_out, T, FF, D)}, err)) return false;
++            }
+             prof_mark(d, 2);
+             const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
+             if (T == 1 && moe_token_path) {
+@@ -10399,8 +10487,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -251,7 +270,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10513,9 @@
+@@ -10428,7 +10519,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -262,7 +281,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10529,10 @@
+@@ -10442,6 +10535,10 @@
                      return false;
                  }
              }
