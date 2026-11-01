@@ -73,7 +73,17 @@
          }
          // which devices hold each source's compressed KV / index keys
          for (Src& s : srcs) {
-@@ -3800,12 +3830,14 @@
+@@ -3593,7 +3623,8 @@
+             // pinned staging as its blob) or from the file's mapping
+             auto mat_r = [&](int r) { return src != nullptr ? src + l.lay.trellis[r] : mx_mat(l, e, r); };
+             bool ok = true;
+-            if (l.nm == 1) {
++            // K100AI-EXPTP: a member holds its experts whole, so the whole-blob copy is the one that applies
++            if (l.nm == 1 || expert_tp_on()) {
+                 if (src != nullptr)
+                     ok = cudaMemcpyAsync(dst, src, l.blob, cudaMemcpyHostToDevice, cs) == cudaSuccess;
+                 else
+@@ -3800,12 +3831,14 @@
      // this offset in the matrix, this long; the down the whole matrix (its part, the blocks [m n_ff / nm / 32, ..) of
      // every row, is DMA'd out of it row by row); alone (nm 1) every matrix whole
      size_t mx_read_off(const Layer& l, int m, int r) const {
@@ -92,7 +102,7 @@
      }
      // the device's member index in L0's group (0 alone)
      int flow_mi(const Chunk& c, const Layer& L0) const {
-@@ -4113,7 +4145,7 @@
+@@ -4113,7 +4146,7 @@
              }
              for (int p = 0; p < 2; ++p)
                  CK(cudaMemcpyAsync(dst + lay.trellis[p], it.src[p], mx_read_len(l, p), cudaMemcpyHostToDevice, c.cs));
@@ -101,7 +111,7 @@
                  const int t2 = gg::expert_type(l.lay, 2);
                  const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
                  CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
-@@ -4328,9 +4360,12 @@
+@@ -4328,9 +4361,12 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -117,7 +127,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4683,20 @@
+@@ -4648,6 +4684,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -138,7 +148,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4763,22 @@
+@@ -4714,6 +4764,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -161,7 +171,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4858,18 @@
+@@ -4793,9 +4859,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -182,7 +192,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4915,10 @@
+@@ -4841,9 +4916,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -195,7 +205,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5328,7 @@
+@@ -5253,7 +5329,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -204,7 +214,7 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8374,11 +8449,17 @@
+@@ -8374,11 +8450,17 @@
          CK(cudaMemcpyAsync(c.bounds_pin, c.bounds, (size_t) (n_vs + 1) * 4, cudaMemcpyDeviceToHost, s));
          prof_mark(d, 10);
          // the shared expert into acc while the host waits for the bounds
@@ -227,7 +237,7 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -10399,8 +10480,11 @@
+@@ -10399,8 +10481,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -241,7 +251,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10512,9 @@
+@@ -10428,7 +10513,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -252,7 +262,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10528,10 @@
+@@ -10442,6 +10529,10 @@
                      return false;
                  }
              }

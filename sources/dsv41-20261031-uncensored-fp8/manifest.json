@@ -352,21 +352,20 @@
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
-        "deployed": "2026-11-02, auf Wunsch: beide Karten rechnen jede Schicht",
-        "container_env": "DS4_AR_RS2=1 DS4_EXPERT_TP=7",
-        "engine": "build-exp/strata-dsv41 --serve --pack pack6 --gpus 0,1 --tp 2 --dspark auto --mmap-experts on",
-        "note_env_value": "DS4_EXPERT_TP ist im Engine ein FLAG: geprueft wird nur getenv() != nullptr, der Wert 7 wird nicht als Grad interpretiert. =1 verhaelt sich identisch.",
-        "verified": {
-          "health": "200 nach ~150 s",
-          "smi": "beide Karten gleichzeitig aktiv (mehrfach 100 %/100 %, 60.8 %/53.3 %), Leistung gleichzeitig 245-311 W",
-          "speed_median": "26.16 tok/s (26.16 / 26.91 / 22.0)",
-          "quality": [
-            "'Paris is the capital of France.'",
-            "korrekte Rayleigh-Erklaerung in drei Saetzen",
-            "korrektes Python: def reverse_string(s): return s[::-1]"
-          ]
-        },
-        "revert": "bash /4T-02/strata-work/serve_rs2.sh (Baseline, Schicht-Split, Median ~26.6 tok/s)"
+        "state": "laeuft auf dem parallelen Build (build-exp, DS4_EXPERT_TP=7, --tp 2, --dspark auto)",
+        "verified": "kurze Anfrage 'The capital of France is Paris.'; lange Anfrage 1479 Prompt-Token + 87 Completion ohne Fehler",
+        "caveat": "Prefill bei langen Prompts ~38% langsamer als die Baseline",
+        "revert": "bash /4T-02/strata-work/serve_rs2.sh"
+      },
+      "api_failure_fixed": {
+        "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
+        "cause": "DRITTE Stelle mit der Halb-Block-Annahme: der Streaming-Loader des Chunk-Pfads nahm bei nm>1 den Mitglieds-Zweig und kopierte nur ffh Zeilen in einen Ring-Slot, der fuer den ganzen Experten bemessen ist",
+        "fix": "if (l.nm == 1 || expert_tp_on()) - der Ganz-Block-Zweig",
+        "verified": "1700-Token-Prompt: exit 0, Ausgabe 671,6102,294,8760,344,11111,16,1 - identisch mit der Baseline"
+      },
+      "prefill_regression": {
+        "measured": "1700-Token-Prompt: Experten-TP 79.50 tok/s gegen Baseline 128.14 tok/s (-38%); Decode 20.06 gegen 17.66",
+        "why": "der Chunk-Pfad streamt die nicht-residenten Experten und synchronisiert die Karten je Schicht - bei langen Prompts kostet das mehr, als die Parallelitaet bringt"
       }
     }
   },
