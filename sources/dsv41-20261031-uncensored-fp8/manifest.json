@@ -252,14 +252,14 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "WIP - TP2 +34%; Plan-Klassifikation nachweislich korrekt, aber Member 1 rechnet seine eigenen Experten nicht",
+      "status": "WIP - TP2 +34%; Ursache weiter eingekreist: die Expertenkerne laufen, liefern aber nichts",
       "measured": {
         "member1_moe_out": "war exakt 0 (alle Picks des Tokens lagen im Bereich von Member 0)",
         "ein_token_prompt": "Basis 223,301,51957,343,... vs Expert-TP 643,671,671,671,... - der Fehler tritt schon beim ersten erzeugten Token auf, also im T=1-Decode-Pfad, nicht im Mehrfenster-Prompt"
       },
       "build_env_gotcha": "der experimentelle Build braucht dieselben CMAKE_HIP_FLAGS wie die Baseline: --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false. Ohne sie ist sogar der Feature-OFF-Pfad degradiert und nicht-deterministisch",
       "verified": "mit den richtigen Flags: Feature OFF -> 'The capital of France is Paris.' (identisch zur Baseline)",
-      "next": "im T=1-Pfad d.xg und d.ed je Member dumpen: schreibt iq::gate_up/iq::down auf dem Nicht-Lead ueberhaupt in seinen Scratch, oder liest der Combine den falschen Puffer",
+      "next": "in iq::gate_up selbst messen: wie viele Gruppen bestehen die group()-Pruefung, und wohin schreibt der Kernel (ia.h / ia.tr Offsets). Alternativ die Zeilenindizes pruefen, die der Down danach liest (e * n_ff)",
       "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
       "bisected": {
         "method": "DS4_DUMP_L (jede Schicht) und DS4_DUMP_S (Unterschritte von Layer 0), Basis gegen Experiment",
@@ -302,7 +302,17 @@
         "conclusion": "die Drei-Zustands-Tabelle klassifiziert richtig und komplementaer; beide Member haben je 3 eigene Experten mit gueltigen Zeigern",
         "but": "member 1s moe_out ist trotzdem exakt 0 (gemessen vor dem all-reduce), Referenz (nm 1) 2.286 gegen member 0 allein 1.38"
       },
-      "build_flag_trap": "der experimentelle Build braucht --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false"
+      "build_flag_trap": "der experimentelle Build braucht --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false",
+      "new_evidence": {
+        "moe_gate_up_calls": "160 Trace-Zeilen = 80 Aufrufe x 2 Member, also beide Member rufen gate/up wirklich auf",
+        "parameters": "k 6, n_embd 5120, n_ff 2304, geom 1, mx 0 (IQ2_XXS-Pfad), 0 iq_args-Fehler",
+        "but": "d.xg ist auf BEIDEN Membern exakt 0, und moe_out enthaelt nur den Shared Expert (Member 0: 1.38 gegen Referenz 2.286)",
+        "plan": "die Plan-Klassifikation ist korrekt und komplementaer (siehe vorige Runde), also liegt es im Inneren von iq::gate_up"
+      },
+      "state": {
+        "experimental_tree": "baut wieder sauber (23.49 MB); ds4_gguf.cu aus der Basis wiederhergestellt und die zwei Sentinel-Patches neu gesetzt",
+        "production": "laeuft auf der Basis, pack6 + DSpark, 18 tok/s"
+      }
     }
   },
   "clean_rebuild_verified": false,
