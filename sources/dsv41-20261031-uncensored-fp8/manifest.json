@@ -252,14 +252,14 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "WIP - TP2 +27%, Ausgabe falsch; Fehler im T=1-Pfad (Ein-Token-Prompt reproduziert ihn sofort)",
+      "status": "WIP - TP2 +34%; Plan-Klassifikation nachweislich korrekt, aber Member 1 rechnet seine eigenen Experten nicht",
       "measured": {
         "member1_moe_out": "war exakt 0 (alle Picks des Tokens lagen im Bereich von Member 0)",
         "ein_token_prompt": "Basis 223,301,51957,343,... vs Expert-TP 643,671,671,671,... - der Fehler tritt schon beim ersten erzeugten Token auf, also im T=1-Decode-Pfad, nicht im Mehrfenster-Prompt"
       },
       "build_env_gotcha": "der experimentelle Build braucht dieselben CMAKE_HIP_FLAGS wie die Baseline: --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false. Ohne sie ist sogar der Feature-OFF-Pfad degradiert und nicht-deterministisch",
       "verified": "mit den richtigen Flags: Feature OFF -> 'The capital of France is Paris.' (identisch zur Baseline)",
-      "next": "im T=1-Pfad die Head-Gather-Stufe pruefen (head_cols / d.logits_part / G.lg_stage) und die logits nach dem Gather gegen die Basis stellen - das ist der einzige Schritt im T=1-Pfad, der noch nicht verglichen wurde",
+      "next": "im T=1-Pfad d.xg und d.ed je Member dumpen: schreibt iq::gate_up/iq::down auf dem Nicht-Lead ueberhaupt in seinen Scratch, oder liest der Combine den falschen Puffer",
       "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
       "bisected": {
         "method": "DS4_DUMP_L (jede Schicht) und DS4_DUMP_S (Unterschritte von Layer 0), Basis gegen Experiment",
@@ -294,7 +294,15 @@
         "Attention und Residualstrom von Layer 0 (bis 1e-07 gleich)",
         "Combine-Sentinel, Ganz-Experte im Streaming, Shared Expert in allen drei Pfaden (Token/Fenster/Chunk), CPU-Lane-Fallback",
         "Chunk-Pfad: laeuft fuer Prompts unter 96 Token gar nicht"
-      ]
+      ],
+      "proven": {
+        "picks_layer0": "277, 128, 155, 137, 206, 251 (identisch auf beiden Membern)",
+        "plan_m0": "peer, own, own, own, peer, peer",
+        "plan_m1": "own, peer, peer, peer, own, own",
+        "conclusion": "die Drei-Zustands-Tabelle klassifiziert richtig und komplementaer; beide Member haben je 3 eigene Experten mit gueltigen Zeigern",
+        "but": "member 1s moe_out ist trotzdem exakt 0 (gemessen vor dem all-reduce), Referenz (nm 1) 2.286 gegen member 0 allein 1.38"
+      },
+      "build_flag_trap": "der experimentelle Build braucht --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false"
     }
   },
   "clean_rebuild_verified": false,
