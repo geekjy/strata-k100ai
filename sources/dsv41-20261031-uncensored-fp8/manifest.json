@@ -252,7 +252,7 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "WIP - TP2 laeuft, +25% decode, Ausgabe falsch; Fehler auf die MoE-Stufe von Layer 0 eingegrenzt",
+      "status": "WIP - TP2 +25%, Fehler auf die MoE-Stufe eingegrenzt; 4 Fixversuche ohne Wirkung",
       "measured": {
         "baseline_layer_split": "decode 18.03 tok/s (32 tok), prompt 30.82",
         "expert_tp": "decode 22.55 tok/s (+25%), prompt 36.09",
@@ -273,7 +273,15 @@
         ],
         "conclusion": "die Attention und der Residualstrom sind korrekt; der Fehler sitzt in der MoE-Stufe (Experten-Split), nicht in der Attention und nicht im Combine (dessen Sentinel-Fix aenderte die Ausgabe nicht)",
         "gotcha": "der Experiment-Lauf nimmt wegen tp>1 den Fenster-Pfad (par = threads || tp > 1), die Basis den Chunk-Pfad - die MoE-Unterschritte (glog/ridx/rw/sh_out/moe_out) existieren dort nicht, ein direkter Vergleich dieser Punkte braucht --threads in beiden Laeufen"
-      }
+      },
+      "attempted_fixes_no_effect": [
+        "Ganz-Experte im Streaming (mx_read_off/mx_read_len/down-Slice)",
+        "Sentinel im Combine (pe != 0ull && pe != ~0ull) in ds4_gguf.cu und vendor/exl3*.cu",
+        "Shared Expert nur vom Lead: Token-Pfad (moe_down)",
+        "Shared Expert nur vom Lead: Fenster-Pfad (wa.sh_out)"
+      ],
+      "why_no_effect": "der Prompt laeuft laut Log auch mit tp=2 durch den CHUNK-Pfad ('windows of 8192'), nicht durch den Fenster-Pfad; die Chunk-MoE bei nm>1 geht ueber run_set -> iq_set/gg::set, und dort gibt es kein sh_out-Feld. Wo der Shared Expert in diesem Pfad addiert wird, ist noch nicht gefunden - das ist der naechste Punkt",
+      "verified_build": "die Experiment-Binaries sind frisch (Objektzeit > Quellezeit), die Aenderungen sind also wirklich drin"
     }
   },
   "clean_rebuild_verified": false,
