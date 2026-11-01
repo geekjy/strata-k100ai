@@ -1,0 +1,150 @@
+--- a/src/dsv41/ds4_model.cu
++++ b/src/dsv41/ds4_model.cu
+@@ -79,6 +79,12 @@
+ #endif
+ 
+ namespace strata::ds4 {
++// K100AI-EXPTP: tensor parallel by expert index - each member of a group holds its own run of the experts whole
++// (no FFN split), the router's table carrying a sentinel for the other members' experts.
++static bool expert_tp_on() {
++    static const bool v = std::getenv("DS4_EXPERT_TP") != nullptr;
++    return v;
++}
+ // K100AI-PROBE: the head's own cost (events around its matvec), reported at the token's final sync
+ static cudaEvent_t g_hev0 = nullptr, g_hev1 = nullptr;
+ static double g_head_ms_sum = 0.0;
+@@ -766,6 +772,9 @@
+     std::vector<int> host_list;
+     std::string name;         // "layers.N." or, for the DSpark drafter's blocks, "mtp.N."
+     int n_exp = 0, k_exp = 0; // routed experts, and how many a token takes (the drafter's: 128, 3)
++    // K100AI-EXPTP: this member's experts [e0, e0 + en); en == 0 keeps the classic split (each member holds a
++    // share of every expert's FFN)
++    int e0 = 0, en = 0;
+     bool mtp = false;         // a DSpark block (index stage = il - n_layers)
+     bool kv_src = false, ix_src = false, owns_k = false, cand_src = false, uses_cand = false;
+     int src = -1;      // the kv source whose compressed KV this layer reads (index into Impl::srcs)
+@@ -2220,13 +2229,18 @@
+                 const int ty = gg_type_of(kv.second.dtype);
+                 if (ty >= 0) blk = std::max(blk, gg::type_block(ty));
+             }
+-            while (tp > 1 && (g.ff % tp != 0 || (g.ff / tp) % blk != 0 || (g.ff / tp) % (std::getenv("DS4_TP_ALIGN") ? std::atoi(std::getenv("DS4_TP_ALIGN")) : 128) != 0 || g.heads % tp != 0 ||
++            while (tp > 1 && (g.ff % tp != 0 || (!expert_tp_on() && (g.ff / tp) % blk != 0) || (g.ff / tp) % (std::getenv("DS4_TP_ALIGN") ? std::atoi(std::getenv("DS4_TP_ALIGN")) : 128) != 0 || g.heads % tp != 0 ||
+                               g.o_groups % tp != 0))
+                 --tp;
+             if (tp != o.tp)
+                 std::fprintf(stderr, "ds4: tensor parallel %d -> %d: the experts' %d-value blocks split n_ff %d no other way "
+                                      "(each GPU its own layers)\n", o.tp, tp, blk, g.ff);
+         }
++        // K100AI-EXPTP: each member of a group takes its own experts whole (no FFN split), so the split is by index
++        if (expert_tp_on() && tp > 1) {
++            std::fprintf(stderr, "ds4: K100AI-EXPTP: tensor parallel %d by expert index (each member its own experts,"
++                                 " whole FFN)\n", tp);
++        }
+         // the groups: runs of tp devices of one kind (their memory), a device unlike the next alone
+         // - or, tp the number of GPUs, one group of all of them whatever their kind (its tightest member sets the
+         // experts' room); threads mode for the windows (decode) where a group is 2 wide or more or --threads on, the
+@@ -2592,6 +2606,13 @@
+                 x.ah0 = ha < 0 ? 0 : ha * x.ahn;
+                 x.ogn = ha < 0 ? 0 : g.o_groups / na;
+                 x.og0 = ha < 0 ? 0 : ha * x.ogn;
++                if (expert_tp_on()) {   // K100AI-EXPTP: whole experts, the file's own layout; the heads stay split
++                    x.ff0 = 0;
++                    x.ffn = g.ff;
++                    x.hlay = l.lay;
++                    x.hblob = l.blob;
++                    continue;
++                }
+                 if (gguf_x) {
+                     x.ffn = g.ff / l.nm;
+                     x.ff0 = m * x.ffn;
+@@ -2623,6 +2644,15 @@
+                 x.hlay.fmt = l.lay.fmt;
+                 x.hblob = off;
+             }
++            if (expert_tp_on()) {   // K100AI-EXPTP: each member holds whole experts, so the layout is the file's
++                for (int m = 0; m < l.nm; ++m) {
++                    Layer& x = member(l, m);
++                    x.ff0 = 0;
++                    x.ffn = g.ff;
++                    x.hlay = l.lay;
++                    x.hblob = l.blob;
++                }
++            }
+         }
+         // which devices hold each source's compressed KV / index keys
+         for (Src& s : srcs) {
+@@ -4648,6 +4678,17 @@
+                 budget = capped;
+                 room = std::max(0.0, room - std::min(budget, all) * nm);
+             }
++            if (expert_tp_on()) {   // K100AI-EXPTP: this group's members take disjoint runs of each layer's experts
++                for (Layer& l : L) {
++                    if (l.grp != (int) gi || l.nm < 2) continue;
++                    const int per = (l.n_exp + l.nm - 1) / l.nm;
++                    for (int m = 0; m < l.nm; ++m) {
++                        Layer& x = member(l, m);
++                        x.e0 = m * per;
++                        x.en = std::min(per, std::max(0, l.n_exp - x.e0));
++                    }
++                }
++            }
+             double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
+             for (Layer& l : L)
+                 if (l.grp == (int) gi && l.mtp) {
+@@ -4714,6 +4755,17 @@
+                 l.spare_vram = -1;
+             }
+             for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
++            if (expert_tp_on()) {   // K100AI-EXPTP: every member's own experts resident, its own arena of en slots
++                l.n_slots = 0;
++                for (int m = 0; m < l.nm; ++m) l.n_slots = std::max(l.n_slots, member(l, m).en);
++                l.slot.assign((size_t) l.n_exp, -1);
++                for (int m = 0; m < l.nm; ++m) {
++                    const Layer& x = member(l, m);
++                    for (int e = x.e0; e < x.e0 + x.en; ++e) l.slot[(size_t) e] = e - x.e0;
++                }
++                l.n_vram = l.n_slots;
++                l.spare_vram = -1;
++            }
+             for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
+                 Layer& x = member(l, m);
+                 Dev& d = devs[(size_t) x.dev];
+@@ -4793,9 +4845,13 @@
+             for (int m = 0; m < l.nm; ++m) {
+                 Layer& x = member(l, m);
+                 std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
+-                for (int e = 0; e < l.n_exp; ++e)
+-                    if (l.slot[(size_t) e] >= 0)
++                for (int e = 0; e < l.n_exp; ++e) {
++                    const bool mine = !expert_tp_on() || (e >= x.e0 && e < x.e0 + x.en);
++                    if (l.slot[(size_t) e] >= 0 && mine)
+                         tab[(size_t) e] = (unsigned long long) (x.vram_base + (size_t) l.slot[(size_t) e] * unit(x));
++                    else if (expert_tp_on())
++                        tab[(size_t) e] = ~0ull;   // K100AI-EXPTP: another member computes this one
++                }
+                 cudaSetDevice(devs[(size_t) x.dev].id);
+                 CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
+             }
+@@ -4841,8 +4897,9 @@
+                     bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
+                     for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
+                         const Layer& x = member(l, m);
++                        if (expert_tp_on() && (e < x.e0 || e >= x.e0 + x.en)) continue;   // K100AI-EXPTP: not this one's
+                         cudaSetDevice(devs[(size_t) x.dev].id);
+-                        if (l.nm > 1) blob_to_half(l, stage, m, stage2);
++                        if (l.nm > 1 && !expert_tp_on()) blob_to_half(l, stage, m, stage2);
+                         ok = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(l), l.nm > 1 ? stage2 : stage,
+                                         unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
+                     }
+--- a/src/dsv41/ds4_gguf.cu
++++ b/src/dsv41/ds4_gguf.cu
+@@ -504,7 +504,8 @@
+ __device__ __forceinline__ bool mx_group(const MxArgs& a, int grp, const uint8_t*& blob, int& m0, int& m1) {
+     if (a.grp_ptr == nullptr) {
+         const unsigned long long p = a.plan_ptr[grp];
+-        if (p == 0ull) return false;
++        // K100AI-EXPTP: 0 is the CPU lane's, ~0ull another member's - both skip this device's work
++        if (p == 0ull || p == ~0ull) return false;
+         blob = (const uint8_t*) p;
+         m0 = grp;
+         m1 = grp + 1;
