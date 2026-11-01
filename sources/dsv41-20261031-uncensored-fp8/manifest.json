@@ -242,6 +242,14 @@
       },
       "drafter_stats": "21 rounds, 16 drafts offered, 10 accepted (1.52 tokens a round), drafting 15.1-15.3 ms a round",
       "serve": "serve.json 现在用 --dspark on，并去掉了 reasoning_effort / reasoning_budget_tokens（按用户要求用默认）"
+    },
+    "parallelism_limits": {
+      "observed": "hy-smi 在推理时只有一张卡 HCU 100%，另一张 0%（两张卡 VRAM 都是 98%）",
+      "why": "引擎在 IQ2_XXS 上退回层切分（CUDA0 layers [0,19]、CUDA1 [20,39]+head）。层切分是流水线切分，单序列自回归解码里 token k+1 依赖 token k 的全部 40 层 + head，所以两张卡必然串行，任何时刻只有一张在算",
+      "tp_refused_by": "ds4_model.cu:2211 —— while (tp > 1 && ((g.ff/tp) % blk != 0 || (g.ff/tp) % 128 != 0 || ...)) --tp;  g.ff = 2304、blk = 256（IQ2_XXS）→ 1152 % 256 != 0 → tp = 1",
+      "only_types_allowing_tp2": "32 值块的那些：MXFP4 4.25 bpw（289 GB）、Q4_0/IQ4_NL 4.5 bpw（306 GB）——都装不进 128 GB 显存，会退回 CPU 通道（pack4 实测 9.84 tok/s）",
+      "cross_token_pipelining": "不可行：自回归依赖 + DSpark 的 draft 只覆盖同一轮的验证，下一轮 draft 依赖上一轮接受结果",
+      "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     }
   },
   "clean_rebuild_verified": false,
