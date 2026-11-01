@@ -244,5 +244,18 @@
     "视觉/多模态路径（只验证了 mmproj 的元数据与装载）",
     "DSpark 草稿的实际收益（本机专家远超显存，引擎自动关闭：--dspark auto 判定不加载）",
     "性能（未产出 token，无 tt/s 数据）"
-  ]
+  ],
+  "packs": {
+    "pack5-iq2xxs": {
+      "what": "专家 IQ2_XXS（2.06 bpw，140.1 GB），Engram 保持 MXFP8（202.8 GB），稠密保持 BF16",
+      "size_gb": 359.74,
+      "smoke": "The capital of France is Paris.<|end▁of▁sentence｜>  (exit 0, 163 s)",
+      "experts_in_vram_pct": 79,
+      "parallelism": "层切分（无跨卡归约）：CUDA0 layers [0,19], CUDA1 layers [20,39] + head",
+      "gpu_per_token_ms": 103.11,
+      "decode_tok_s": "10.4-11.0",
+      "bottleneck": "lm head：1.32 GB 在主机内存，每 token 经 PCIe 读一遍，78-86 ms（~90% 的 token 时间）",
+      "notes": "ggml 里 IQ2_XXS = 16、IQ4_NL = 20（写错类型号会让引擎按 IQ4_NL 读，smoke 段错误）；IQ2_XXS 强制要 imatrix，这里用全 1（不加权最小二乘）"
+    }
+  }
 }

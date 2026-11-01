@@ -323,6 +323,41 @@ TP2 时每层有**两次**跨卡归约（注意力输出、专家输出），即
 - `DS4_AR_F16=1`（归约用 FP16，字节减半）**没有效果**（98.59 → 100.07 ms），说明这块是**延迟受限**而不是带宽受限，与上游注释"no gain on 4x R9700"一致；
 - **单卡**（`--gpus 0`）没有归约（`nm == 1`，`down + post` 只有 3.61 ms），但只能装 2417 个专家，CPU 通道要等 140 ms/token，总体仍是 4.29 tok/s，比双卡的 5.26 慢——所以双卡 + reduce-scatter 是当前最优组合。
 
+### 专家量化到 IQ2_XXS：508 → 360 GB，GPU 计算减半（2026-11-01 13:00）
+
+Engram 保持 MXFP8 不动（你的内存够，它也不在 decode 关键路径上：0.22 ms/token），只把 120 个专家张量从 MXFP4 重编码成 IQ2_XXS。
+
+**工具链（本目录 `tools/`）**：`llama-quantize` 用不了——我们的 GGUF 架构是 `deepseek41`（llama.cpp 不认识），而且 Engram 的 type 43 在这一版 llama.cpp 里是 `F8_E4M3` 不是 MXFP8。所以拆成两层：
+
+- `requant_mxfp4_to_iq2xxs.cpp`：只做算术（ggml 的 `to_float` + `ggml_quantize_chunk`），读 GGUF 里的一段 MXFP4 字节、写 IQ2_XXS 字节；
+- `ds4_requant_gguf.py`：自己解析 GGUF 头，**只替换 120 个专家张量**，其余 923 个张量（含 203 GB 的 Engram）逐字节原样拷贝。
+
+注意两个坑：**ggml 里 `IQ2_XXS = 16`、`IQ4_NL = 20`**（我第一次写成 20，引擎按 IQ4_NL 读 IQ2_XXS 的字节，smoke 直接段错误）；**IQ2_XXS 强制要求 imatrix**，我们传全 1（等价于不加权的最小二乘，质量比用真实重要度矩阵略差，这是唯一的质量折中）。
+
+实测：120 个专家张量 × 120 进程并行，**101.9 分钟**出 359.74 GB（组装另 16.5 分钟，可复用中间块）。速度瓶颈是 IQ2_XXS 的参考量化器本身（单核 0.76 MB/s）。
+
+**结果**：
+
+| | pack4（MXFP4） | **pack5（IQ2_XXS）** |
+|---|---|---|
+| 专家 | 288.8 GB | **140.1 GB（2.06 bpw）** |
+| 总大小 | 508.4 GB | **359.7 GB** |
+| 专家在显存 | 37% | **79%** |
+| CPU 通道专家 | 9740（183 GB） | **3172（29 GB）**；热起来后 0 |
+| 并行方式 | TP2（每层两次跨卡归约） | **层切分**（`CUDA0 [0,19]`、`CUDA1 [20,39]`，无归约） |
+| GPU 每 token | 192.03 ms | **103.11 ms** |
+| down + post | 47.64 ms | **3.70 ms**（没有归约了） |
+| 等 CPU 通道 | 38.49 ms | **18.03 ms** |
+| **head wait** | 67.16 ms | **95.06 ms** ← 成了新的瓶颈 |
+| smoke | 283 s | **163 s** |
+| decode | 9.84 tok/s | 10.4–11.0 tok/s |
+
+smoke 通过：`The capital of France is Paris.<|end▁of▁sentence｜>`，exit 0，163 s。
+
+**结论**：量化按预期成功（显存占用、CPU 通道、GPU 计算量全部大幅改善），但**瓶颈转移到了 lm head**：它 1.32 GB 放在主机内存，每 token 经 PCIe 读一遍，78–86 ms 占到了 ~90% 的 token 时间。`--reserve-mib 2048/4096`（显存留空）和 `DS4_HEAD_PER`（4/16/64/128）都试过，对 head wait 没有影响——装载位置不由显存余量决定。
+
+下一步要提速只能动 head：把它量化到 Q6_K（引擎的 `mat()` 支持 BF16/Q8_0/Q4_K/Q5_K/Q6_K，1.32 → 1.03 GB），或者让它在两张卡上切分（pack4 的 TP2 模式就是这么做的，78 → ~40 ms），后者需要在引擎里给 head 单独建跨卡组。
+
 ## 内存上的两个坑（实测）
 
 1. **`--mmap-experts auto` 会 OOM**：它把 CPU 通道的 244.8 GB 专家**拷进内存**（`copied in at load`），加上转换留下的 459 GB 页缓存，503 GB 内存直接被打爆（`Out of memory: Killed process … anon-rss:217432340kB`）。
