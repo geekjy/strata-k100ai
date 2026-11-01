@@ -217,7 +217,20 @@
       "rs2": "7.01 / 6.73 tok/s, down + post 84.66 / 91.32 ms",
       "gain": "+22~23% decode, 约 -30 ms/token",
       "negative_DS4_AR_F16": "FP16 归约无效（98.59 vs 100.07 ms）—— 延迟受限，不是带宽受限",
-      "single_gpu": "nm==1 无归约（down+post 3.61 ms）但只能装 2417 个专家，CPU 通道 140 ms/token，总体 4.29 tok/s，慢于双卡 5.26"
+      "single_gpu": "nm==1 无归约（down+post 3.61 ms）但只能装 2417 个专家，CPU 通道 140 ms/token，总体 4.29 tok/s，慢于双卡 5.26",
+      "allreduce_cost_analysis": {
+        "turned_off": "DS4_AR_OFF=1：down+post 127.19 -> 6.84 ms，确认约 120 ms/token 是归约本身（40 次 x ~3 ms）",
+        "micro_benchmarks": {
+          "empty_kernel_launch": "2.8 us（5 blocks x 256 是 3.9 us，launch+sync 15.0 us）",
+          "write_20KB_device": "6.6 us",
+          "write_20KB_host_mapped": "16.3 us（加 __threadfence_system 反而 15.5 us，fence 免费）",
+          "read_20KB_host_mapped": "29.0 us",
+          "sysfence_only": "3.4 us"
+        },
+        "conclusion": "一次完整交换约 45 us，而引擎里是 ~3 ms，差 60 倍 —— 不是发射、不是 fence、不是传输，而是两块卡在每个 barrier 上的等待（skew）。80 个同步点/token。",
+        "single_round_trip_variant": "DS4_AR_REP=1（每个成员直接读对端整行、按固定成员顺序求和，1 次往返代替 2 次）：6.30 -> 6.81 tok/s，down+post 103.00 -> 92.75 ms，只值 ~8%",
+        "note": "DS4_AR_OFF=1 时整体 decode 反而从 5.50 掉到 4.58 tok/s（CPU 通道等待 118 -> 158），说明这 120 ms 有时被 CPU 通道等待掩盖"
+      }
     }
   },
   "clean_rebuild_verified": false,
