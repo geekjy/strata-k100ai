@@ -351,7 +351,23 @@
         "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
-      "production": "zurueck auf der Baseline (build-dsv41-full, layer split), health 200, Median ~26.6 tok/s"
+      "production": {
+        "deployed": "2026-11-02, auf Wunsch: beide Karten rechnen jede Schicht",
+        "container_env": "DS4_AR_RS2=1 DS4_EXPERT_TP=7",
+        "engine": "build-exp/strata-dsv41 --serve --pack pack6 --gpus 0,1 --tp 2 --dspark auto --mmap-experts on",
+        "note_env_value": "DS4_EXPERT_TP ist im Engine ein FLAG: geprueft wird nur getenv() != nullptr, der Wert 7 wird nicht als Grad interpretiert. =1 verhaelt sich identisch.",
+        "verified": {
+          "health": "200 nach ~150 s",
+          "smi": "beide Karten gleichzeitig aktiv (mehrfach 100 %/100 %, 60.8 %/53.3 %), Leistung gleichzeitig 245-311 W",
+          "speed_median": "26.16 tok/s (26.16 / 26.91 / 22.0)",
+          "quality": [
+            "'Paris is the capital of France.'",
+            "korrekte Rayleigh-Erklaerung in drei Saetzen",
+            "korrektes Python: def reverse_string(s): return s[::-1]"
+          ]
+        },
+        "revert": "bash /4T-02/strata-work/serve_rs2.sh (Baseline, Schicht-Split, Median ~26.6 tok/s)"
+      }
     }
   },
   "clean_rebuild_verified": false,
