@@ -252,13 +252,17 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "WIP - TP2 +34%; Ursache weiter eingekreist: die Expertenkerne laufen, liefern aber nichts",
+      "status": "FUNKTIONIERT - TP2 nach Experten-Index liefert korrekte Ausgabe",
       "measured": {
         "member1_moe_out": "war exakt 0 (alle Picks des Tokens lagen im Bereich von Member 0)",
         "ein_token_prompt": "Basis 223,301,51957,343,... vs Expert-TP 643,671,671,671,... - der Fehler tritt schon beim ersten erzeugten Token auf, also im T=1-Decode-Pfad, nicht im Mehrfenster-Prompt"
       },
       "build_env_gotcha": "der experimentelle Build braucht dieselben CMAKE_HIP_FLAGS wie die Baseline: --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false. Ohne sie ist sogar der Feature-OFF-Pfad degradiert und nicht-deterministisch",
-      "verified": "mit den richtigen Flags: Feature OFF -> 'The capital of France is Paris.' (identisch zur Baseline)",
+      "verified": {
+        "smoke": "The capital of France is Paris. (mit DS4_EXPERT_TP=1)",
+        "token_match": "32 Token: die ersten 13 Token identisch mit der Basis (671,6102,294,8760,344,11111,16,1,3227,28,6102,294,8760); danach nur die bekannte Streuung der CPU-Lane",
+        "gate_up_readback": "nach dem Fix echte Werte (z. B. -0.0139 -0.0115 -0.0027 -0.0638), 1 von 80 Aufrufen null (der Fall, in dem alle Picks dem Peer gehoeren)"
+      },
       "next": "in iq::gate_up selbst messen: wie viele Gruppen bestehen die group()-Pruefung, und wohin schreibt der Kernel (ia.h / ia.tr Offsets). Alternativ die Zeilenindizes pruefen, die der Down danach liest (e * n_ff)",
       "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
       "bisected": {
@@ -310,8 +314,19 @@
         "plan": "die Plan-Klassifikation ist korrekt und komplementaer (siehe vorige Runde), also liegt es im Inneren von iq::gate_up"
       },
       "state": {
-        "experimental_tree": "baut wieder sauber (23.49 MB); ds4_gguf.cu aus der Basis wiederhergestellt und die zwei Sentinel-Patches neu gesetzt",
-        "production": "laeuft auf der Basis, pack6 + DSpark, 18 tok/s"
+        "production": "laeuft weiter auf der Basis (pack6 + DSpark, 21.8 tok/s)",
+        "experimental": "baut sauber, funktioniert"
+      },
+      "root_cause": {
+        "symptom": "die Expertenkerne liefen mit gueltigen Zeigern, lieferten aber lauter Nullen (h[0..3] = 0 0 0 0 bei 80 von 80 Aufrufen)",
+        "cause": "der Loader kopierte die Experten aus stage2, dem Halb-Block-Puffer, den blob_to_half fuellt. Mit Experten-Index-TP wird blob_to_half uebersprungen, also enthielt stage2 nichts - und damit hatte jeder Experte im VRAM lauter Nullen",
+        "fix": "cudaMemcpy-Quelle: (l.nm > 1 && !expert_tp_on()) ? stage2 : stage, an beiden Kopierstellen",
+        "why_it_was_invisible": "kein Fehler, kein Absturz, keine Warnung - die Kerne rechneten mit gueltigen Zeigern auf Nullen und lieferten 0"
+      },
+      "speed": {
+        "dspark_off": "Expert-TP 23.0-24.1 tok/s gegen Basis 18.0-19.2 (+20..34%)",
+        "dspark_on": "Expert-TP 22.11 tok/s gegen Basis 21.81 - mit DSpark fast kein Gewinn mehr",
+        "prompt": "37.2 gegen 35.0 tok/s"
       }
     }
   },

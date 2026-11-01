@@ -182,17 +182,28 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,8 +4915,9 @@
+@@ -4841,9 +4915,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
 +                        if (expert_tp_on() && (e < x.e0 || e >= x.e0 + x.en)) continue;   // K100AI-EXPTP: not this one's
                          cudaSetDevice(devs[(size_t) x.dev].id);
 -                        if (l.nm > 1) blob_to_half(l, stage, m, stage2);
+-                        ok = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(l), l.nm > 1 ? stage2 : stage,
 +                        if (l.nm > 1 && !expert_tp_on()) blob_to_half(l, stage, m, stage2);
-                         ok = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(l), l.nm > 1 ? stage2 : stage,
++                        ok = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(l), (l.nm > 1 && !expert_tp_on()) ? stage2 : stage,
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
+                     if (!ok) {
+@@ -5253,7 +5328,7 @@
+                                 cur_dev = d.id;
+                             }
+                             if (l.nm > 1) blob_to_half(l, stage, m, stage2);
+-                            up = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(x), l.nm > 1 ? stage2 : stage,
++                            up = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(x), (l.nm > 1 && !expert_tp_on()) ? stage2 : stage,
+                                             unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
+                         }
+                         if (!up) {
 @@ -8374,11 +8449,17 @@
          CK(cudaMemcpyAsync(c.bounds_pin, c.bounds, (size_t) (n_vs + 1) * 4, cudaMemcpyDeviceToHost, s));
          prof_mark(d, 10);
