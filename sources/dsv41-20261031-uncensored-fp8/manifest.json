@@ -252,7 +252,7 @@
       "real_fix": "按专家序号切分（每个成员持 192 of 384 专家，n_ff 仍 2304，不受块约束；MoE 输出用引擎已有的 allreduce 求和）——需要改路由、装载与显存记账，是功能级改动"
     },
     "expert_index_tp": {
-      "status": "WIP - TP2 laeuft und ist 25% schneller, die Ausgabe wiederholt sich aber (Prompt-/Ring-Pfad)",
+      "status": "WIP - TP2 laeuft, +25% decode, Ausgabe falsch; Fehler auf die MoE-Stufe von Layer 0 eingegrenzt",
       "measured": {
         "baseline_layer_split": "decode 18.03 tok/s (32 tok), prompt 30.82",
         "expert_tp": "decode 22.55 tok/s (+25%), prompt 36.09",
@@ -262,7 +262,18 @@
       "build_env_gotcha": "der experimentelle Build braucht dieselben CMAKE_HIP_FLAGS wie die Baseline: --gpu-max-threads-per-block=1024 -mllvm -amdgpu-early-inline-all=true -mllvm -amdgpu-function-calls=false. Ohne sie ist sogar der Feature-OFF-Pfad degradiert und nicht-deterministisch",
       "verified": "mit den richtigen Flags: Feature OFF -> 'The capital of France is Paris.' (identisch zur Baseline)",
       "next": "Ring-/Fensterpfad: die gestreamten Experten muessen nach 'gehoert diesem Member' liegen (run_set bekommt fuer fremde Experten bounds 0)",
-      "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2"
+      "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
+      "bisected": {
+        "method": "DS4_DUMP_L (jede Schicht) und DS4_DUMP_S (Unterschritte von Layer 0), Basis gegen Experiment",
+        "belegt": [
+          "Layer-0-Eingang: rel 1.5e-07 (nur Float-Rauschen)",
+          "Attention: a_mix/a_pre/a_post/attn_x/qr/kv_win/ext/o/ao und h_attn alle <= 1e-07",
+          "FFN-Eingang: f_pre/f_post/f_comb/ffn_x alle <= 2e-07",
+          "Layer-0-Ausgang: rel 2.07  <-- hier bricht es"
+        ],
+        "conclusion": "die Attention und der Residualstrom sind korrekt; der Fehler sitzt in der MoE-Stufe (Experten-Split), nicht in der Attention und nicht im Combine (dessen Sentinel-Fix aenderte die Ausgabe nicht)",
+        "gotcha": "der Experiment-Lauf nimmt wegen tp>1 den Fenster-Pfad (par = threads || tp > 1), die Basis den Chunk-Pfad - die MoE-Unterschritte (glog/ridx/rw/sh_out/moe_out) existieren dort nicht, ein direkter Vergleich dieser Punkte braucht --threads in beiden Laeufen"
+      }
     }
   },
   "clean_rebuild_verified": false,

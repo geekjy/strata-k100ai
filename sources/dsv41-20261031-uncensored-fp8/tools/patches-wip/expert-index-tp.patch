@@ -73,7 +73,35 @@
          }
          // which devices hold each source's compressed KV / index keys
          for (Src& s : srcs) {
-@@ -4328,9 +4358,12 @@
+@@ -3800,12 +3830,14 @@
+     // this offset in the matrix, this long; the down the whole matrix (its part, the blocks [m n_ff / nm / 32, ..) of
+     // every row, is DMA'd out of it row by row); alone (nm 1) every matrix whole
+     size_t mx_read_off(const Layer& l, int m, int r) const {
+-        return r < 2 && l.nm > 1 ? (size_t) m * (size_t) (g.ff / l.nm) * gg::type_row_bytes(gg::expert_type(l.lay, r), g.dim)
+-                                 : 0;
++        return r < 2 && l.nm > 1 && !expert_tp_on()
++                   ? (size_t) m * (size_t) (g.ff / l.nm) * gg::type_row_bytes(gg::expert_type(l.lay, r), g.dim)
++                   : 0;
+     }
+     size_t mx_read_len(const Layer& l, int r) const {
+-        return r < 2 && l.nm > 1 ? (size_t) (g.ff / l.nm) * gg::type_row_bytes(gg::expert_type(l.lay, r), g.dim)
+-                                 : mx_part_bytes(l, r);
++        return r < 2 && l.nm > 1 && !expert_tp_on()
++                   ? (size_t) (g.ff / l.nm) * gg::type_row_bytes(gg::expert_type(l.lay, r), g.dim)
++                   : mx_part_bytes(l, r);
+     }
+     // the device's member index in L0's group (0 alone)
+     int flow_mi(const Chunk& c, const Layer& L0) const {
+@@ -4113,7 +4145,7 @@
+             }
+             for (int p = 0; p < 2; ++p)
+                 CK(cudaMemcpyAsync(dst + lay.trellis[p], it.src[p], mx_read_len(l, p), cudaMemcpyHostToDevice, c.cs));
+-            if (l.nm > 1) {   // (the down's part: in each of its rows the member's blocks)
++            if (l.nm > 1 && !expert_tp_on()) {   // (the down's part: in each of its rows the member's blocks)
+                 const int t2 = gg::expert_type(l.lay, 2);
+                 const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
+                 CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
+@@ -4328,9 +4360,12 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -89,7 +117,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4681,20 @@
+@@ -4648,6 +4683,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -110,7 +138,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4761,22 @@
+@@ -4714,6 +4763,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -133,7 +161,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4856,13 @@
+@@ -4793,9 +4858,13 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -149,7 +177,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,8 +4908,9 @@
+@@ -4841,8 +4910,9 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -160,7 +188,7 @@
                          ok = cudaMemcpy(x.vram_base + (size_t) l.slot[(size_t) e] * unit(l), l.nm > 1 ? stage2 : stage,
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
-@@ -10399,8 +10467,11 @@
+@@ -10399,8 +10469,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -186,6 +214,18 @@
          blob = (const uint8_t*) p;
          m0 = grp;
          m1 = grp + 1;
+@@ -651,7 +652,10 @@
+     float p[8];
+     for (int i = 0; i < a.k; ++i) {
+         const int e = t * 8 + i;
+-        p[i] = a.plan_ptr[e] != 0ull ? a.part[(size_t) e * a.n_embd + r] : 0.0f;
++        // K100AI-EXPTP: 0ull is the CPU lane's (its part comes in separately), ~0ull another member's -
++        // both add nothing here; taking a.part for them read what the down kernel never wrote
++        const unsigned long long pe = a.plan_ptr[e];
++        p[i] = (pe != 0ull && pe != ~0ull) ? a.part[(size_t) e * a.n_embd + r] : 0.0f;
+     }
+     a.out[(size_t) t * a.out_stride + r] =
+         combine(a.plan_w + t * 8, p, a.k,
 --- a/src/dsv41/ds4_iq.cu
 +++ b/src/dsv41/ds4_iq.cu
 @@ -582,7 +582,8 @@
@@ -210,3 +250,31 @@
              int g = 0;
              while (g < ng && gp[g] != p) ++g;
              if (g == ng) {
+--- a/src/dsv41/vendor/exl3.cu
++++ b/src/dsv41/vendor/exl3.cu
+@@ -748,7 +748,10 @@
+     float p[8];
+     for (int i = 0; i < a.k; ++i) {
+         const int e = t * 8 + i;
+-        p[i] = a.plan_ptr[e] != 0ull ? a.part[(size_t) e * a.n_embd + r] : 0.0f;
++        // K100AI-EXPTP: 0ull is the CPU lane's (its part comes in separately), ~0ull another member's -
++        // both add nothing here; taking a.part for them read what the down kernel never wrote
++        const unsigned long long pe = a.plan_ptr[e];
++        p[i] = (pe != 0ull && pe != ~0ull) ? a.part[(size_t) e * a.n_embd + r] : 0.0f;
+     }
+     a.out[(size_t) t * a.out_stride + r] =
+         combine(a.plan_w + t * 8, p, a.k,
+--- a/src/dsv41/vendor/exl3_legacy.cu
++++ b/src/dsv41/vendor/exl3_legacy.cu
+@@ -634,7 +634,10 @@
+     float p[8];
+     for (int i = 0; i < a.k; ++i) {
+         const int e = t * 8 + i;
+-        p[i] = a.plan_ptr[e] != 0ull ? a.part[(size_t) e * a.n_embd + r] : 0.0f;
++        // K100AI-EXPTP: 0ull is the CPU lane's (its part comes in separately), ~0ull another member's -
++        // both add nothing here; taking a.part for them read what the down kernel never wrote
++        const unsigned long long pe = a.plan_ptr[e];
++        p[i] = (pe != 0ull && pe != ~0ull) ? a.part[(size_t) e * a.n_embd + r] : 0.0f;
+     }
+     a.out[(size_t) t * a.out_stride + r] =
+         combine(a.plan_w + t * 8, p, a.k, a.cpu_flag[t] ? a.cpu_part + (size_t) t * a.n_embd + r : nullptr,
