@@ -386,7 +386,22 @@
         "'The capital of France is Paris.'",
         "kohaerente Python-Antwort",
         "1479-Token-Prompt: 2.6 s, korrekte Zusammenfassung, kein Fehler"
-      ]
+      ],
+      "attention_analysis": {
+        "profile_tp_build": "GPU 77.1-78.7 ms je Token: attention 42.9, routing+shared 13.7, gate/up 6.4, CPU-Lane-Warten 1.8, down+post 12.2 (Summe beider Karten)",
+        "tried": {
+          "kPre=8 on HIP": "attention 43.53 -> 42.90 ms (-1.4 %), stetig aber klein; jetzt eingebaut",
+          "DS4_ATTN_SPLIT=1": "attention 43.14 - kein Gewinn",
+          "DS4_ATTN_SPLIT=2": "attention 43.39 - kein Gewinn"
+        },
+        "key_finding": "die Attention ist ein FIXER Posten je Token, nicht KV-getrieben: bei ~50 Kontextzeilen 43.18 ms, bei ~1730 Zeilen (30x) 54.90 ms - nur +27 %",
+        "ruled_out": "check() ist nur cudaGetLastError, kein Sync; die Launch-Kosten kommen also nicht von Fehlerpruefungen",
+        "next_options": [
+          "im Attention-Stage selbst messen: unpack_sel gegen die Dot-Kerne aufteilen",
+          "fuer ckv_fmt FP4 den direkten gepackten Pfad (sparse_attn_kernel<false>) fuer T=1 testen statt unpack+BF16",
+          "Occupancy/Launch auf gfx928 (wave64) pruefen - 0.54 ms je Schicht und Karte ist fuer ~50 Zeilen zu viel"
+        ]
+      }
     }
   },
   "clean_rebuild_verified": false,
