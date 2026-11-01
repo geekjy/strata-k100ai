@@ -263,7 +263,7 @@
         "token_match": "32 Token: die ersten 13 Token identisch mit der Basis (671,6102,294,8760,344,11111,16,1,3227,28,6102,294,8760); danach nur die bekannte Streuung der CPU-Lane",
         "gate_up_readback": "nach dem Fix echte Werte (z. B. -0.0139 -0.0115 -0.0027 -0.0638), 1 von 80 Aufrufen null (der Fall, in dem alle Picks dem Peer gehoeren)"
       },
-      "next": "richtige Messung: Server einmal starten, mehrere Anfragen je Konfiguration, Median; oder --n 256 mit 5 Wiederholungen. Erst danach ueber Produktion entscheiden",
+      "next": "im Stage die drei Projektionen einzeln messen (eigene Profilmarken) und beim Engram die Host-Wartezeit pruefen",
       "files": "ds4_model.cu +56, ds4_gguf.cu +9, ds4_iq.cu +2, vendor/moe_win.cu +2",
       "bisected": {
         "method": "DS4_DUMP_L (jede Schicht) und DS4_DUMP_S (Unterschritte von Layer 0), Basis gegen Experiment",
@@ -401,7 +401,21 @@
           "fuer ckv_fmt FP4 den direkten gepackten Pfad (sparse_attn_kernel<false>) fuer T=1 testen statt unpack+BF16",
           "Occupancy/Launch auf gfx928 (wave64) pruefen - 0.54 ms je Schicht und Karte ist fuer ~50 Zeilen zu viel"
         ]
-      }
+      },
+      "attention_stage_anatomized": {
+        "method": "zwei temporaere Schalter im Kernelpfad: DS4_ATTN_ONLY_UNPACK (nur unpack) und DS4_ATTN_SKIP_UNPACK (nur Dots), dieselbe Profiler-Stufe",
+        "full_ms": "42.66 (zweiter Lauf 43.68)",
+        "without_dot_kernel_ms": "41.30  -> die Dot-Kerne kosten nur ~1.4 ms",
+        "without_unpack_ms": "42.12  -> das Unpack kostet nur ~0.5 ms",
+        "conclusion": "die beiden Attention-Kernel machen zusammen unter 2 ms der 42 ms aus. Der Rest der Stufe ist KEIN Attention-Kernel"
+      },
+      "what_the_stage_really_contains": [
+        "Engram: eg_finish (wartet auf Host-Reads), zwei memcpys je Token, engram_dequant, mv(eg_wkv), engram_gate",
+        "hc_mix_split und hc_pre_norm",
+        "die q/kv/o-Projektionen (GEMV, 5120x1280-Klasse, dieselbe Groessenordnung wie der Shared Expert mit 13.6 ms)",
+        "am Ende erst sparse_attn"
+      ],
+      "why_this_matters": "die Optimierung muss auf die Projektionen und das Engram zielen, nicht auf den Attention-Kernel; 0.54 ms je Schicht und Karte war nie eine Kernel-Frage"
     }
   },
   "clean_rebuild_verified": false,

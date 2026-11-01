@@ -330,12 +330,14 @@
          m1 = grp + 1;
 --- a/src/dsv41/ds4_kernels.cu
 +++ b/src/dsv41/ds4_kernels.cu
-@@ -2575,12 +2575,12 @@
+@@ -2574,13 +2574,13 @@
+                 scr->cap, scr->rows, T, a.gen ? 1 : (T < kWin ? T : kWin), kv_row_bytes(kKvFp4, 512))) return;
  #endif
          strata_ds4_launch(unpack_sel_kernel, dim3(cdiv(sel_stride, kStage), T), kThreads, 0, s, (const uint8_t*) ckv, sel, sel_stride, a,
-                                                                                scr->cap, scr->rows);
+-                                                                               scr->cap, scr->rows);
 -#if !defined(STRATA_USE_HIP)
 -        if (T == 1)   // (V100: the loads ahead pay for the decode's kernel at one query, not at more)
++                                                                                   scr->cap, scr->rows);
 +        // K100AI: the 8-row register prefetch is arch-neutral code (eight uint4 loads, then the dots); it was
 +        // gated to CUDA, and the decode's attention is 39% of a token here - so take it on HIP too
 +        if (T == 1)
