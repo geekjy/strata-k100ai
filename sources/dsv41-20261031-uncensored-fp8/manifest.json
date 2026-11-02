@@ -676,7 +676,7 @@
           "why_that_is_not_a_real_finding": "die Guard-Werte sind Geraete-Globals und damit ZWISCHEN DEN BEIDEN MEMBERS GETEILT: waehrend Member 0 laeuft, kann Member 1 sie schon ueberschrieben haben - der Abstand von genau 3 Strifts ist die Signatur des anderen Members, nicht ein Fehler im Kernel",
           "conclusion": "ein Guard ueber Geraete-Globals ist fuer zwei Members unbrauchbar; die Werte muessten pro Launch durch die Argumente gehen (dafuer muesste man die SetArgs-Struktur durch x3 und iq durchreichen)"
         },
-        "status": "14 Hypothesen ausgeschlossen; der Fehler tritt ausschliesslich bei 2 Mitgliedern x Experten-TP x Chunk-Pfad auf, mit gueltigen Eingaben, an wechselnden Instruktionen",
+        "status": "BEHOBEN",
         "capacities_in_the_args": {
           "done": "die Kapazitaeten reisen jetzt PRO LAUNCH in SetArgs (rows_cap, bounds_cap, idx_cap, tok_cap); dafuer wurden beide SetArgs (include/strata/dsv41/exl3.hpp und src/dsv41/ds4_iq.cuh) und die Kopie in iq_set() erweitert",
           "why": "ein Guard ueber Geraete-Globals ist mit zwei Mitgliedern nicht auswertbar (die Globals sind geteilt)",
@@ -720,7 +720,25 @@
           "plan_streams_timing": "wird genau einmal vor dem Lauf aufgerufen (Zeile 9516) - kein Rennen",
           "chunk_go": "ist nur die Stop-/Abbruchlogik, keine Chunk-Zuteilung"
         },
-        "what_is_needed": "ein Geraete-Debugger mit GPU-Speicherzugriff (Variables/Locals lesen) oder Unterstuetzung durch Hygon; mit den Bordmitteln ist die Grenze erreicht"
+        "what_is_needed": "ein Geraete-Debugger mit GPU-Speicherzugriff (Variables/Locals lesen) oder Unterstuetzung durch Hygon; mit den Bordmitteln ist die Grenze erreicht",
+        "ROOT_CAUSE_AND_FIX": {
+          "symptom": "VMFault im Chunk-Pfad sobald der Prompt laenger als ~2048 Token war; mit 1715 Token und kleiner ging es",
+          "how_found": "schneller Reproducer ueber den API-Server (13 s statt 15 min), dann hipgdb: der faultende Kernel war ein rocBLAS/Tensile-GEMM (Cijk_..._) - also NICHT der Experten-Kernel; danach Buffergroessen und GEMM-Dimensionen gedruckt",
+          "root_cause": "unter Experten-TP rechnet jedes Mitglied GANZE Experten und das Lead den GANZEN shared expert (Breite g.ff = 2304), aber die Scratch-Puffer wurden weiter mit dem HALBEN FFN-Anteil aus split128(g.ff, nm, ...) dimensioniert (1152). Der shared-expert-GEMM (n=2304) schrieb also in einen 1152 breiten Puffer, sobald T > C/2 = 2048",
+          "evidence": [
+            "GEMM d0: n 2304 k 5120 rows 3111 ldy 2304 mit y = c.sg",
+            "BUF dump: sg +18,874,368 B (= C*1152*4) - der GEMM brauchte C*2304*4",
+            "Fehleradresse lag 240 KB hinter c.sg; nach dem ersten Teilfix wanderte sie hinter c.h16 (2.4 MB), bis alle vier Puffer ganz breit waren",
+            "die Schwelle C/2 = 2048 erklaert exakt die gemessenen Grenzen (1715 ok, 3105 kaputt)"
+          ],
+          "fix": "c.sg, c.su, c.sh16 und c.h16 werden unter expert_tp_on() mit der ganzen FFN-Breite (g.ff) dimensioniert statt mit dem halben Anteil",
+          "verified": [
+            "2210 Token: 116.03 tok/s Prefill, 22.58 Decode, Ausgabe korrekt",
+            "4080 Token: 169.95 tok/s, 22.62, korrekt",
+            "10200 Token: 183.42 tok/s, 22.35, korrekt",
+            "API-Server, fuenf gemischte Anfragen inkl. 2x ~10k Token: alle 200, der Engine-Prozess blieb oben (0 'engine stopped')"
+          ]
+        }
       },
       "dual_card_plan": {
         "single_request": "Experten-TP (beide Karten zugleich) - durch diesen Bug blockiert; hipgdb ist der Weg",
@@ -774,5 +792,5 @@
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   },
-  "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200"
+  "production": "Kandidat: Experten-TP (beide Karten je Layer) mit pack7 + DSpark; Basis-Engine bleibt als Rueckfall"
 }

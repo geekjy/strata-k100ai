@@ -73,12 +73,26 @@
          }
          // which devices hold each source's compressed KV / index keys
          for (Src& s : srcs) {
-@@ -3407,7 +3437,12 @@
+@@ -3324,6 +3354,11 @@
+             const int NHL = g.heads / head_members(nm), HQ = NHL * HD, OG = g.o_groups / head_members(nm);
+             int FF = 0, ff0_ = 0;
+             split128(g.ff, nm, 0, ff0_, FF);   // (the widest member's share: member 0 takes the odd blocks)
++            // K100AI-EXPTP: with whole experts per member the LEAD computes the WHOLE shared expert (see the dc_split
++            // note below), so the shared expert's scratch must be as wide as the whole FFN - with the per-member share
++            // it ran off the end as soon as T > C/2 (that was the chunk-path VMFault: 2304 columns written into a
++            // 1152-wide c.sg, i.e. every prompt past ~2048 tokens).
++            const int FFs = (nm > 1 && expert_tp_on()) ? g.ff : FF;
+             const size_t C = (size_t) chunk;
+             c.C = chunk;
+             // the base slab: STRATA_DS4_A_MB megabytes of q.  Every dense GEMM of a layer is issued once a slab, so the slab width divides
+@@ -3406,8 +3441,13 @@
+                       dalloc(d, c.glog, C * 1024, err) && dalloc(d, c.ridx, C * kPicks, err) &&
                        dalloc(d, c.rw, C * kPicks, err) && dalloc(d, c.bounds, 2048, err) &&
                        dalloc(d, c.row_tok, C * kPicks, err) && dalloc(d, c.pos, C * kPicks, err) &&
-                       dalloc(d, c.sg, C * FF, err) && dalloc(d, c.su, C * FF, err) && dalloc(d, c.sh16, C * FF, err) &&
+-                      dalloc(d, c.sg, C * FF, err) && dalloc(d, c.su, C * FF, err) && dalloc(d, c.sh16, C * FF, err) &&
 -                      dalloc(d, c.h16, (C + kH16Pad) * FF, err) && dalloc(d, c.y, C * D, err) && dalloc(d, c.w16, c.w16_elems, err) &&
-+                      dalloc(d, c.h16, (C + kH16Pad) * FF, err) &&
++                      dalloc(d, c.sg, C * FFs, err) && dalloc(d, c.su, C * FFs, err) && dalloc(d, c.sh16, C * FFs, err) &&
++                      dalloc(d, c.h16, (C + kH16Pad) * FFs, err) &&
 +                      // K100AI canary: 2048 rows right behind y; a write past y's C rows lands in mapped memory,
 +                      // so it is reported instead of faulting - and it names the layer and the distance
 +                      dalloc(d, c.y, (size_t) (C + 2048) * D, err) &&
@@ -87,7 +101,44 @@
                        halloc(c.bounds_pin, 2048, err);
              if (!ok) return false;
              if (has_first && !dalloc(d, c.emb, C * D, err)) return false;
-@@ -3593,7 +3628,8 @@
+@@ -3428,6 +3468,16 @@
+                 CK(cudaEventCreateWithFlags(&c.filled[i], cudaEventDisableTiming));
+                 CK(cudaEventCreateWithFlags(&c.freed[i], cudaEventDisableTiming));
+             }
++            // K100AI: where each chunk buffer lies and how big it is
++            if (std::getenv("DS4_BUFDBG"))
++                std::fprintf(stderr,
++                             "BUF C %d: h %p x %p acc %p | sg %p +%zu | su %p +%zu | sh16 %p +%zu | h16 %p +%zu | "
++                             "y %p +%zu | w16 %p +%zu | mix %p +%zu\n",
++                             c.C, (void*) c.h, (void*) c.x, (void*) c.acc, (void*) c.sg, (size_t) c.C * FFs * 4,
++                             (void*) c.su, (size_t) c.C * FFs * 4, (void*) c.sh16, (size_t) c.C * FFs * 2,
++                             (void*) c.h16, (size_t) (c.C + 16) * FFs * 2, (void*) c.y,
++                             (size_t) (c.C + 2048) * D * 4, (void*) c.w16, c.w16_elems * 2, (void*) c.mix,
++                             (size_t) c.C * 32 * 4);
+             if (cublasCreate(&c.blas) != CUBLAS_STATUS_SUCCESS || cublasSetStream(c.blas, d.st) != CUBLAS_STATUS_SUCCESS) {
+                 err = "cuBLAS on CUDA" + std::to_string(d.id);
+                 return false;
+@@ -3457,6 +3507,9 @@
+         static const bool pf = strata::ds4::dense_pfgemm_default(env_tri("STRATA_DENSE_PFGEMM"), defaults_026());
+ #endif
+         const int cols = std::max(128, (int) std::min<size_t>((size_t) m.n, c.w16_elems / (size_t) m.k) / 128 * 128);
++        if (std::getenv("DS4_GEMMDBG"))
++            std::fprintf(stderr, "GEMM d%d: n %d k %d rows %d ldx %d ldy %d cols %d x16 %p y %p w %p\n", (int) d.id,
++                         m.n, m.k, rows, ldx, ldy, cols, (const void*) x16, (void*) y, (const void*) c.w16);
+         for (int c0 = 0; c0 < m.n; c0 += cols) {
+             const int nc = std::min(cols, m.n - c0);
+             if (m.fmt != 0) gg::rows(nc == m.n ? m : gg::view(m, c0, nc), c.w16, false, d.st);   // (a GGUF's)
+@@ -3575,6 +3628,9 @@
+         }
+ #endif
+         const float one = 1.0f, zero = 0.0f;
++        if (std::getenv("DS4_GEMMDBG"))
++            std::fprintf(stderr, "GEMM-mix d%d: n %d T %d k %d h %p fn %p out %p\n", (int) d.id, n_mix, T, hcd,
++                         (const void*) h, (const void*) fn, (void*) mixes);
+         if (cublasSgemm(c.blas, CUBLAS_OP_T, CUBLAS_OP_N, n_mix, T, hcd, &one, fn, hcd, h, hcd, &zero, mixes, 32) !=
+             CUBLAS_STATUS_SUCCESS) {
+             err = "cublasSgemm (mHC mixes)";
+@@ -3593,7 +3649,8 @@
              // pinned staging as its blob) or from the file's mapping
              auto mat_r = [&](int r) { return src != nullptr ? src + l.lay.trellis[r] : mx_mat(l, e, r); };
              bool ok = true;
@@ -97,7 +148,7 @@
                  if (src != nullptr)
                      ok = cudaMemcpyAsync(dst, src, l.blob, cudaMemcpyHostToDevice, cs) == cudaSuccess;
                  else
-@@ -3800,12 +3836,14 @@
+@@ -3800,12 +3857,14 @@
      // this offset in the matrix, this long; the down the whole matrix (its part, the blocks [m n_ff / nm / 32, ..) of
      // every row, is DMA'd out of it row by row); alone (nm 1) every matrix whole
      size_t mx_read_off(const Layer& l, int m, int r) const {
@@ -116,7 +167,7 @@
      }
      // the device's member index in L0's group (0 alone)
      int flow_mi(const Chunk& c, const Layer& L0) const {
-@@ -4111,9 +4149,19 @@
+@@ -4111,9 +4170,19 @@
                  ++c.n_dma;
                  continue;
              }
@@ -138,7 +189,17 @@
                  const int t2 = gg::expert_type(l.lay, 2);
                  const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
                  CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
-@@ -4197,6 +4245,9 @@
+@@ -4192,11 +4261,19 @@
+     // over the chunk's rows, in pieces of at most C rows, each added into acc in pick order
+     bool run_set(Dev& d, Chunk& c, const Layer& l, const uint8_t* wbase, int wb0, size_t stride, const int* d_bounds,
+                  const int* b, int i0, int i1, int T, std::string& err) {
++        // K100AI: DS4_SERIALIZE serialises this between the two members (a test of whether two threads
++        // launching the same big kernel at once corrupt each other's argument buffer)
++        static std::mutex serialise_mu;
++        std::unique_lock<std::mutex> serialise(serialise_mu, std::defer_lock);
++        if (std::getenv("DS4_SERIALIZE")) serialise.lock();
+         const int D = g.dim, FF = l.ffn;
+         while (i0 < i1) {
              int j = i0 + 1;
              while (j < i1 && b[j + 1] - b[i0] <= c.C) ++j;
              const int a = b[i0], nrows = b[j] - a;
@@ -148,7 +209,7 @@
              int max_rows = 0;
              for (int i = i0; i < j; ++i) max_rows = std::max(max_rows, b[i + 1] - b[i]);
              if (nrows > 0) {
-@@ -4208,6 +4259,33 @@
+@@ -4208,6 +4285,33 @@
                  sa.bounds = d_bounds + i0;
                  sa.row0 = a;
                  sa.max_rows = max_rows;
@@ -182,7 +243,7 @@
  #if defined(STRATA_METAL)
                  sa.hbounds = b + i0;
                  sa.total_rows = nrows;
-@@ -4290,7 +4368,23 @@
+@@ -4290,7 +4394,23 @@
                      std::fwrite(yv.data(), 4, yv.size(), dump_y);
                      std::fflush(dump_y);
                  }
@@ -207,7 +268,7 @@
              }
              i0 = j;
          }
-@@ -4328,9 +4422,15 @@
+@@ -4328,9 +4448,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -226,7 +287,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4748,20 @@
+@@ -4648,6 +4774,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -247,7 +308,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4828,22 @@
+@@ -4714,6 +4854,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -270,7 +331,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4923,18 @@
+@@ -4793,9 +4949,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -291,7 +352,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4980,10 @@
+@@ -4841,9 +5006,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -304,7 +365,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5393,7 @@
+@@ -5253,7 +5419,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -313,7 +374,16 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8368,17 +8508,23 @@
+@@ -8344,7 +8510,7 @@
+             if (!gemm(d, c, l.wo_b, c.oa16, OG * g.o_lora, na, c.acc + (size_t) a0 * D, D, 0.0f, err)) return false;
+             if (a0 == 0 && na == T) dump_sub(d, "ao", l.il, p0, T, c.acc, (size_t) T * D * 4);
+         }
+-        if (nm > 1) allreduce(c.acc, T * D, ab, mi, ++c.arb_seq, d.xcnt, s);
++        if (nm > 1 && !std::getenv("DS4_NO_CHUNK_AR")) allreduce(c.acc, T * D, ab, mi, ++c.arb_seq, d.xcnt, s);
+         dump_sub(d, "h_in", l.il, p0, T, c.h, (size_t) T * H * D * 4);
+         hc_post_inplace(c.acc, c.h, c.a_post, c.a_comb, D, H, T, s);
+         if (dump_l != nullptr && mi == 0) dump_layer(d, c.h, 1000 + l.il, p0, T);   // (after the attention, as the window path)
+@@ -8368,17 +8534,23 @@
              route(c.glog + (size_t) r0 * 1024, l.gate_bias, l.n_exp, l.k_exp, nr, g.route_scale,
                    c.ridx + (size_t) r0 * kPicks, c.rw + (size_t) r0 * kPicks, s, l.gate_bias_vl, vl ? &vb : nullptr);
          }
@@ -343,7 +413,25 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -8515,7 +8661,27 @@
+@@ -8470,7 +8642,7 @@
+         }
+         if (c.flow) {
+             if (!flow_layer(d, c, L0, mi, wp.k, T, b, err)) return false;
+-            if (nm > 1) allreduce(c.acc, T * D, ab, mi, ++c.arb_seq, d.xcnt, s);
++            if (nm > 1 && !std::getenv("DS4_NO_CHUNK_AR")) allreduce(c.acc, T * D, ab, mi, ++c.arb_seq, d.xcnt, s);
+             hc_post_inplace(c.acc, c.h, c.f_post, c.f_comb, D, H, T, s);
+             CK(cudaMemcpyAsync(c.pre, c.f_pre, (size_t) T * 8 * 4, cudaMemcpyDeviceToDevice, s));
+             prof_mark(d, 3);
+@@ -8498,7 +8670,7 @@
+             v_done = v_to;
+         }
+         if (!run_set(d, c, l, l.vram_base, 0, unit(l), c.bounds, b.data(), v_done, L0.n_slots, T, err)) return false;
+-        if (nm > 1) allreduce(c.acc, T * D, ab, mi, ++c.arb_seq, d.xcnt, s);
++        if (nm > 1 && !std::getenv("DS4_NO_CHUNK_AR")) allreduce(c.acc, T * D, ab, mi, ++c.arb_seq, d.xcnt, s);
+         hc_post_inplace(c.acc, c.h, c.f_post, c.f_comb, D, H, T, s);
+         CK(cudaMemcpyAsync(c.pre, c.f_pre, (size_t) T * 8 * 4, cudaMemcpyDeviceToDevice, s));
+         prof_mark(d, 3);
+@@ -8515,7 +8687,27 @@
              for (int m = 0; m < l.nm; ++m) {   // (a group's members: each its own copy)
                  Layer& x = member(l, m);
                  int j = 0;
@@ -372,7 +460,7 @@
              }
          }
      }
-@@ -10051,13 +10217,19 @@
+@@ -10051,13 +10243,19 @@
              const size_t per = (size_t) cols * (ehd + ehd / 32);
              eg_finish(*eg_win[(size_t) l.eg]);   // (asked for when the window began)
              uint8_t* src = h_eg + (size_t) l.eg * eg_cap * per;
@@ -398,7 +486,7 @@
              engram_dequant(d.eg_rows, sc, T * cols, ehd, d.eg_x, s, (int) eg_fmt[(size_t) l.eg]);
              dump_sub(d, "eg_rows", l.il, p0, T, d.eg_rows, (size_t) T * cols * ehd);
              dump_sub(d, "eg_x", l.il, p0, T, d.eg_x, (size_t) T * cols * ehd * 4);
-@@ -10360,9 +10532,12 @@
+@@ -10360,9 +10558,12 @@
              route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                            d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
                            na[1], l.il);
@@ -414,7 +502,7 @@
              prof_mark(d, 2);
              const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
              if (T == 1 && moe_token_path) {
-@@ -10399,8 +10574,11 @@
+@@ -10399,8 +10600,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -428,7 +516,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10606,9 @@
+@@ -10428,7 +10632,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -439,7 +527,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10622,10 @@
+@@ -10442,6 +10648,10 @@
                      return false;
                  }
              }
@@ -575,7 +663,7 @@
                  const size_t at = (size_t) sr * a.ldx + (size_t) kb * 32 + c;
                  v = GATE_UP ? a.xf[at] : __half2float(__ushort_as_half(a.xh[at]));
              }
-@@ -804,11 +861,22 @@
+@@ -804,11 +861,28 @@
          const int r = ty * RT + i;
          if (r >= nr) continue;
          const size_t lr = (size_t) (r0 + r);
@@ -595,6 +683,12 @@
 +            // K100AI: unsigned 32-bit, so the compiler must zero-extend instead of taking the pointer's
 +            // high half as the offset's (that made the store run to 0x1F48_C2BF4600 and fault)
 +            const unsigned uidx = (unsigned) lr * (unsigned) a.ldo + (unsigned) c;
++            // K100AI: hard clamp to the buffer's real size - never let a store leave h/y
++            if (a.rows_cap > 0 && uidx >= (unsigned) a.rows_cap * (unsigned) a.ldo) {
++                if (threadIdx.x == 0) printf("CLAMP store: idx %u >= %u (lr %zu ldo %d c %d)\n", uidx,
++                                             (unsigned) a.rows_cap * (unsigned) a.ldo, lr, a.ldo, c);
++                continue;
++            }
 +            if (GATE_UP) a.h[uidx] = __half_as_ushort(__float2half_rn(swiglu(ag[i][j], au[i][j], a.limit)));
 +            else a.y[uidx] = ag[i][j];
          }
