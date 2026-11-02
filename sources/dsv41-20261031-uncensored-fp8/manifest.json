@@ -352,7 +352,8 @@
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
-        "state": "build-exp/strata-dsv41 --tp 2 --dspark on, DS4_EXPERT_TP=7, health 200",
+        "state": "build-exp --tp 2 --dspark on, DS4_EXPERT_TP=7, health 200, 'The capital of France is Paris.'",
+        "tree": "sauber: ds4_main.cpp und ds4_model.hpp wieder identisch mit der Baseline, Binary 23.50 MB",
         "revert": "bash /4T-02/strata-work/serve_rs2.sh"
       },
       "api_failure_fixed": {
@@ -415,7 +416,20 @@
         "die q/kv/o-Projektionen (GEMV, 5120x1280-Klasse, dieselbe Groessenordnung wie der Shared Expert mit 13.6 ms)",
         "am Ende erst sparse_attn"
       ],
-      "why_this_matters": "die Optimierung muss auf die Projektionen und das Engram zielen, nicht auf den Attention-Kernel; 0.54 ms je Schicht und Karte war nie eine Kernel-Frage"
+      "why_this_matters": "die Optimierung muss auf die Projektionen und das Engram zielen, nicht auf den Attention-Kernel; 0.54 ms je Schicht und Karte war nie eine Kernel-Frage",
+      "decode_cost_resolved": {
+        "method": "vier zusaetzliche Profilmarken in der Decode-Attention-Stufe (prof_ms von 6 auf 11 Slots, eigener Printer), danach wieder entfernt",
+        "split_per_token": {
+          "Engram": 8.69,
+          "attn mHC + Norm": 3.43,
+          "attn projections (wq_a/wkv/compressor)": 3.09,
+          "q_b + Indexer (Auswahl)": 12.63,
+          "sparse_attn + wo": 17.12,
+          "Summe": 44.96
+        },
+        "cross_check": "das Weglassen der Attention-Dot-Kerne sparte nur 1.4 ms -> von den 17.12 ms sind ~15.7 ms die Ausgabeprojektion wo_a/wo_b, nicht die Attention selbst",
+        "conclusion": "der Decode ist durchgehend GEMV-/bandbreitengebunden: wo ~15.7, q_b+Indexer 12.6, Engram 8.7, mHC+Norm 3.4, Projektionen 3.1. Kernel-Tuning bringt hier fast nichts - der echte Hebel ist die Bitbreite der dichten Gewichte (Q6_K -> Q4_K) bzw. ein kleineres Engram"
+      }
     }
   },
   "clean_rebuild_verified": false,
