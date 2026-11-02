@@ -351,7 +351,7 @@
         "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
-      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200",
+      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200, 'The capital of France is Paris.'",
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
         "cause": "DRITTE Stelle mit der Halb-Block-Annahme: der Streaming-Loader des Chunk-Pfads nahm bei nm>1 den Mitglieds-Zweig und kopierte nur ffh Zeilen in einen Ring-Slot, der fuer den ganzen Experten bemessen ist",
@@ -491,7 +491,7 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "im set_kernel die Zeilenindizes pruefen (row_tok[bounds[i]..bounds[i+1]] gegen die Kapazitaet von h16/x16) und ob bounds/row0 fuer nm=2 anders skaliert werden als fuer nm=1",
+        "next_step": "c.y/c.pos Kapazitaeten in SetArgs/CombArgs mitgeben und im Kernel hart klemmen; damit laesst sich der Ausreisser im Wert identifizieren statt ihn nur zu verhindern",
         "set_args_dumped": {
           "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
           "findings": [
@@ -511,6 +511,19 @@
           ],
           "kernel": "ds4_iq.cu:1202 ist launch_set -> set_kernel, die Expertenmenge des Chunk-Pfads",
           "combined_with_the_arg_dump": "die erfassten run_set-Aufrufe liegen alle in ihrer Arena; rows_total erreicht aber T*k_exp (~24480 bei 4k), und die Fehleradresse liegt ausserhalb jeder Allokation - der verbleibende Verdacht ist die Zeilen-/Aktivierungsindizierung im set_kernel (row0/row_tok/h16) bei grossen Zeilenzahlen, nicht der Blob-Zeiger"
+        },
+        "true_fault_site": {
+          "how": "PRELOG traegt jetzt die Device-Id; damit liessen sich die letzten Laeufe je Karte trennen",
+          "device_1_last": "ds4_kernels.cu:2412 -> moe_combine_kernel, Gitter (cdiv(5120,256), T) = (20, 4080) - exakt die beobachtete Gitterform",
+          "device_0_last": "ds4_iq.cu:1259 (light_set der Experten) - also nur die andere Karte war weiter hinten",
+          "correction": "der zuvor verdaechtigte set_kernel (ds4_iq.cu:1202) war ein Fehlschluss: die Zeilennummer stammte aus der veralteten lokalen Kopie; im echten Baum liegt dort etwas anderes",
+          "kernel": "moe_combine_kernel: liest pos[t*kPicks+i] und y[(r-r0)*dim+e], gefiltert auf [r0, r1)",
+          "checks_done": [
+            "run_set teilt in Stuecke von hoechstens c.C Zeilen (b[j+1]-b[i0] <= c.C), c.C = chunk = T hier 4080",
+            "c.pos ist C*kPicks gross, t < T = C",
+            "der Experten-Index-Guard in set_kernel hat nichts geaendert (e ist also nicht die Ursache)"
+          ],
+          "open": "die Indizes von moe_combine sind unter den geprueften Annahmen gueltig - es bleibt eine Inkonsistenz zwischen pos/r0/r1 und der Groesse von c.y, die nur ein Device-Debugger oder ein Guard mit Kapazitaetswerten klaert"
         }
       }
     }
