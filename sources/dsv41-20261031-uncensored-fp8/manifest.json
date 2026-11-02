@@ -352,13 +352,9 @@
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
-        "state": "build-dsv41-full (Basis, Schicht-Split) + pack7 (Q4_K), --dspark on, restart unless-stopped",
-        "scripts": {
-          "stable": "serve_pack7.sh",
-          "parallel_short_prompts_only": "serve_exptp.sh",
-          "pack6_baseline": "serve_rs2.sh"
-        },
-        "open": "Chunk-Pfad des Experten-TP reparieren (VMFault ab ~2k Token), danach Parallelmodus wieder als Default"
+        "state": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, --restart unless-stopped, health 200",
+        "verified": "'The capital of France is Paris.'",
+        "open": "Chunk-Pfad des Experten-TP (VMFault ab ~2k Token); solange laeuft die Produktion ohne Zwei-Karten-Parallelitaet"
       },
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
@@ -461,6 +457,31 @@
         "mitigation": "Produktion auf die stabile Basis-Engine umgestellt, aber mit pack7 (Q4_K) - der Quantisierungsgewinn bleibt, lange Prompts gehen wieder (12.639 Token verifiziert, 79 s), und der Container hat jetzt --restart unless-stopped",
         "cost": "der Zwei-Karten-Parallelmodus ist aus, bis der Chunk-Pfad des Experten-TP repariert ist",
         "measured_now": "25.2 / 20.03 / 31.82 / 27.75 tok/s (Mittel ~27), Qualitaet ok"
+      },
+      "disk_incident": {
+        "what": "/4T-02 war zu 100 % voll (0 Byte frei); SFTP-Uploads schlugen mit 'size mismatch 0 != N' fehl",
+        "cause": "16 Core-Dumps aus der heutigen Absturzserie in /4T-02/strata-work, zusammen ~1.2 TB (core.63 141G, core.62/254/19/14/13 140G je, core.1012 140G, core.625 97G, ...)",
+        "fix": "alle core.* geloescht -> 947 GB frei (72 %); kernel.core_pattern=/dev/null gesetzt, damit weitere Abstuerze keine Cores mehr schreiben",
+        "side_effect": "der Dienst-Container war waehrend der Tests per docker rm entfernt worden (eine restart-Policy ueberlebt rm nicht); neu deployt"
+      },
+      "chunk_path_bisect": {
+        "goal": "den GPU-VMFault des Experten-TP bei langen Prompts eingrenzen",
+        "matrix": {
+          "tp1 + expert_tp, 4k Prompt": "OK (142.93 tok/s) - meine nm-unabhaengigen Aenderungen sind also in Ordnung",
+          "tp1 ohne Feature, 4k": "OK (148.17 tok/s)",
+          "tp2 + expert_tp, 1700 Token": "OK",
+          "tp2 + expert_tp, 4k": "VMFault",
+          "tp2 + expert_tp, 4k, --vram-experts 0": "VMFault (also nicht die VRAM-Arena, sondern der Ring/Streaming-Pfad)",
+          "tp2 + expert_tp, 4k, DS4_AR_RS2=1/0/leer": "alle drei VMFault (also nicht das All-Reduce)"
+        },
+        "ruled_out": [
+          "Ring-Slot-Groesse (eine Grenzpruefung wurde eingebaut und feuert nie)",
+          "VRAM-Arena",
+          "All-Reduce-Variante",
+          "die nm-unabhaengigen Aenderungen (tp1 laeuft)"
+        ],
+        "fault": "der letzte Kernel vor dem Absturz ist set_kernel (ds4_iq.cu:1202, Gitter 124x36) - die Expertenmenge des Chunk-Pfads",
+        "open": "bei --vram-experts 0 feuerte die run_set-Spur gar nicht, also laeuft dieser Fall ueber einen anderen Zweig (c.flow == false?) - dort weitersuchen"
       }
     }
   },
