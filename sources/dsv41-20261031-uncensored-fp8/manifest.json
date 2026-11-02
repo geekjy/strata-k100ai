@@ -351,10 +351,7 @@
         "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
-      "production": {
-        "state": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200, 946 GB frei",
-        "note": "Experten-TP bleibt experimentell: kurze Prompts korrekt und schneller, laengere sporadisch VMFault"
-      },
+      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200",
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
         "cause": "DRITTE Stelle mit der Halb-Block-Annahme: der Streaming-Loader des Chunk-Pfads nahm bei nm>1 den Mitglieds-Zweig und kopierte nur ffh Zeilen in einen Ring-Slot, der fuer den ganzen Experten bemessen ist",
@@ -496,7 +493,7 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "Host-seitige Datenrennen mit ThreadSanitizer finden: den Experten-TP-Baum mit -fsanitize=thread bauen und den Chunk-Pfad fahren; der GPU-VMFault ist nur das Symptom eines host-seitig verdrehten Zeigers/Index",
+        "next_step": "mit hipgdb einen Device-Breakpoint im set_kernel setzen und die Indizes (sr, lr, c) am Fehlerpunkt lesen - hipgdb kann das, es ist im Image",
         "set_args_dumped": {
           "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
           "findings": [
@@ -591,7 +588,27 @@
           "VRAM-Arena vs Ring",
           "Prefill-Chunk-Groesse (nur Wahrscheinlichkeit, keine harte Grenze)"
         ],
-        "remaining_hypothesis": "eine unsynchronisierte Abhaengigkeit INNERHALB der Chunk-Schicht (zwischen Ring/Staging und der Berechnung) oder ein Zustand, der nur mit zwei Devices im Chunk-Pfad kippt; ohne rocgdb (im Image nur gdb) nicht weiter einzugrenzen"
+        "remaining_hypothesis": "eine unsynchronisierte Abhaengigkeit INNERHALB der Chunk-Schicht (zwischen Ring/Staging und der Berechnung) oder ein Zustand, der nur mit zwei Devices im Chunk-Pfad kippt; ohne rocgdb (im Image nur gdb) nicht weiter einzugrenzen",
+        "hipgdb": {
+          "tool": "/opt/dtk/bin/hipgdb (GDB 15.2) ist im Image vorhanden - der gesuchte rocgdb-Ersatz",
+          "backtrace_at_the_abort": "#0 strata::ds4::gguf::iq::(anonymous namespace)::set_kernel<16, true, 16>(SetArgs) at ds4_iq.cu:814",
+          "meaning": "es ist der gate/up-set-Kernel der Chunks (Typ 16 = IQ2_XXS, GATE_UP=true), und zwar die Stelle, die h beschreibt",
+          "note": "die frueheren Verdachte (moe_combine, set_kernel allgemein) sind damit praezisiert: es ist der gate/up-Set"
+        },
+        "set_kernel_args_dumped": {
+          "method": "Device-printf beim ersten Block jedes set-Kernel-Aufrufs (DS4_SETDBG)",
+          "example": "e 0 n_exp 3 lo 0 hi 0 row0 2319 max_rows 64 ldx 5120 ldo 2304 n_ff 2304 n_embd 5120 h 0x7f8bbfa00000 xf 0x7f8c61600000 gu 1",
+          "observations": [
+            "die Sets sind klein (33-65 Zeilen) und werden sauber gestueckelt - row0 waechst bis 2454",
+            "lo/hi des ersten Experten sind 0/0 (ein Set darf mit einem leeren Experten beginnen)",
+            "der lr-Guard (g_setRowsCap) feuert nie: die Ausgabezeile ist in Ordnung"
+          ],
+          "fault_address_relation": "0x7f8b4e701000 liegt UNTER beiden Puffern (h 0x7f8bbfa00000, xf 0x7f8c61600000) - also kein Ueberlauf nach oben, sondern ein Zugriff mit negativem bzw. verdrehtem Index (oder auf einen anderen Puffer, der dort liegt)"
+        }
+      },
+      "dual_card_plan": {
+        "single_request": "Experten-TP (beide Karten zugleich) - durch diesen Bug blockiert; hipgdb ist der Weg",
+        "concurrent_requests": "zwei Instanzen, je eine Karte und ein Port - beide Karten arbeiten dann gleichzeitig, ohne Code-Risiko"
       }
     }
   },
