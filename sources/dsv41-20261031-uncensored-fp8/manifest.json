@@ -352,8 +352,7 @@
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
-        "state": "build-exp --tp 2 --dspark on, DS4_EXPERT_TP=7, health 200, 'The capital of France is Paris.'",
-        "tree": "sauber: ds4_main.cpp und ds4_model.hpp wieder identisch mit der Baseline, Binary 23.50 MB",
+        "state": "build-exp --tp 2 --dspark on, DS4_EXPERT_TP=7, health 200, smoke ok",
         "revert": "bash /4T-02/strata-work/serve_rs2.sh"
       },
       "api_failure_fixed": {
@@ -429,6 +428,14 @@
         },
         "cross_check": "das Weglassen der Attention-Dot-Kerne sparte nur 1.4 ms -> von den 17.12 ms sind ~15.7 ms die Ausgabeprojektion wo_a/wo_b, nicht die Attention selbst",
         "conclusion": "der Decode ist durchgehend GEMV-/bandbreitengebunden: wo ~15.7, q_b+Indexer 12.6, Engram 8.7, mHC+Norm 3.4, Projektionen 3.1. Kernel-Tuning bringt hier fast nichts - der echte Hebel ist die Bitbreite der dichten Gewichte (Q6_K -> Q4_K) bzw. ein kleineres Engram"
+      },
+      "engram": {
+        "measured_cost": "8.91 ms je Token (attention 43.95 -> 35.04 mit DS4_EG_SKIP)",
+        "where_it_goes": "die Platten-Reads sind nur ~0.5 ms (0.19 ms bis zur letzten, 0.30 ms Rest); der Rest ist GPU: zwei H2D-memcpys, engram_dequant, mv(eg_wkv) und engram_gate je Schicht, also ~6 kleine Aufrufe x 40 Schichten",
+        "optimized": "bei T == 1 sind [rows | scales] im Host-Puffer zusammenhaengend und das Device-Layout auch - eine Kopie statt zwei (eine Launch weniger je Schicht)",
+        "gained": "attention 43.95 -> 43.43 (-0.52 ms)",
+        "remaining": "~8.4 ms: engram_dequant + mv(eg_wkv) (echter GEMV ueber eine grosse Gewichtsmatrix) + engram_gate; weitere Gewinne brauchen Kernel-Fusion (dequant in den GEMV) - groesserer Eingriff, vielleicht 2-4 ms",
+        "correctness": "Layout ist aequivalent (bei T=1 schreiben beide Varianten dieselben Bytes an dieselben Stellen); smoke: 'The capital of France is Paris.'"
       }
     }
   },

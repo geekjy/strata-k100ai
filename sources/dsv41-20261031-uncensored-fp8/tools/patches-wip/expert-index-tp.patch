@@ -240,7 +240,33 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -10360,9 +10445,12 @@
+@@ -10051,13 +10136,19 @@
+             const size_t per = (size_t) cols * (ehd + ehd / 32);
+             eg_finish(*eg_win[(size_t) l.eg]);   // (asked for when the window began)
+             uint8_t* src = h_eg + (size_t) l.eg * eg_cap * per;
+-            for (int t = 0; t < T; ++t)   // [token][rows | scales] -> [all rows][all scales]
+-                CK(cudaMemcpyAsync(d.eg_rows + (size_t) t * cols * ehd, src + (size_t) t * per, (size_t) cols * ehd,
+-                                   cudaMemcpyHostToDevice, s));
+             uint8_t* sc = d.eg_rows + (size_t) T * cols * ehd;
+-            for (int t = 0; t < T; ++t)
+-                CK(cudaMemcpyAsync(sc + (size_t) t * cols * (ehd / 32), src + (size_t) t * per + (size_t) cols * ehd,
+-                                   (size_t) cols * (ehd / 32), cudaMemcpyHostToDevice, s));
++            if (T == 1) {
++                // K100AI: a decode token's [rows | scales] are one contiguous block in the host buffer and the
++                // device layout is contiguous too, so one copy replaces the two (and one launch a layer)
++                CK(cudaMemcpyAsync(d.eg_rows, src, per, cudaMemcpyHostToDevice, s));
++            } else {
++                for (int t = 0; t < T; ++t)   // [token][rows | scales] -> [all rows][all scales]
++                    CK(cudaMemcpyAsync(d.eg_rows + (size_t) t * cols * ehd, src + (size_t) t * per, (size_t) cols * ehd,
++                                       cudaMemcpyHostToDevice, s));
++                for (int t = 0; t < T; ++t)
++                    CK(cudaMemcpyAsync(sc + (size_t) t * cols * (ehd / 32), src + (size_t) t * per + (size_t) cols * ehd,
++                                       (size_t) cols * (ehd / 32), cudaMemcpyHostToDevice, s));
++            }
+             engram_dequant(d.eg_rows, sc, T * cols, ehd, d.eg_x, s, (int) eg_fmt[(size_t) l.eg]);
+             dump_sub(d, "eg_rows", l.il, p0, T, d.eg_rows, (size_t) T * cols * ehd);
+             dump_sub(d, "eg_x", l.il, p0, T, d.eg_x, (size_t) T * cols * ehd * 4);
+@@ -10360,9 +10451,12 @@
              route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                            d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
                            na[1], l.il);
@@ -256,7 +282,7 @@
              prof_mark(d, 2);
              const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
              if (T == 1 && moe_token_path) {
-@@ -10399,8 +10487,11 @@
+@@ -10399,8 +10493,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -270,7 +296,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10519,9 @@
+@@ -10428,7 +10525,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -281,7 +307,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10535,10 @@
+@@ -10442,6 +10541,10 @@
                      return false;
                  }
              }
