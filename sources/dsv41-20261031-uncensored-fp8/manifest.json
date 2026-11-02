@@ -351,7 +351,10 @@
         "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
-      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200",
+      "production": {
+        "state": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200, 946 GB frei",
+        "note": "Experten-TP bleibt experimentell: kurze Prompts korrekt und schneller, laengere sporadisch VMFault"
+      },
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
         "cause": "DRITTE Stelle mit der Halb-Block-Annahme: der Streaming-Loader des Chunk-Pfads nahm bei nm>1 den Mitglieds-Zweig und kopierte nur ffh Zeilen in einen Ring-Slot, der fuer den ganzen Experten bemessen ist",
@@ -569,7 +572,26 @@
             "DS4_WARM=0 (kein Warm-up-Thread) aendert nichts: alle vier Varianten stuerzen ab"
           ],
           "conclusion": "der Fehler ist nicht deterministisch - es ist ein Wettlauf, kein zu kleiner Puffer. Die Frueheren 'Schwellen' (chunk 1024/2048, 4k/6k) waren nur Wahrscheinlichkeiten, keine harten Grenzen"
-        }
+        },
+        "tsan_round": {
+          "build": "eigener build-tsan mit -fsanitize=thread auf dem Host-Pfad (78 MB Binary), laeuft",
+          "result": "5 Reports, ALLE in rocBLAS/Tensile (KernelLanguageTypes.cpp, tensile_host.cpp) - bekanntes Rauschen der Lazy-Loader-Threads; KEIN einziger Frame in strata-exp/src",
+          "meaning": "kein Host-Datenrennen in unserem Code"
+        },
+        "per_layer_sync_round": {
+          "test": "cudaStreamSynchronize nach jedem Layer-Expertenblock (DS4_SYNC_LAYER=1)",
+          "result": "stuerzt weiter ab (2100, 4k, 10k) - also keine fehlende Stream-Abhaengigkeit auf dieser Ebene"
+        },
+        "exhausted": [
+          "Host-Datenrennen (TSan sauber)",
+          "fehlende Stream-Synchronisation je Layer",
+          "Warm-up-Thread (DS4_WARM=0)",
+          "Kapazitaets-/Index-Guards (combine, y-Canary, Host-Invariant, Experten-Index)",
+          "All-Reduce-Varianten",
+          "VRAM-Arena vs Ring",
+          "Prefill-Chunk-Groesse (nur Wahrscheinlichkeit, keine harte Grenze)"
+        ],
+        "remaining_hypothesis": "eine unsynchronisierte Abhaengigkeit INNERHALB der Chunk-Schicht (zwischen Ring/Staging und der Berechnung) oder ein Zustand, der nur mit zwei Devices im Chunk-Pfad kippt; ohne rocgdb (im Image nur gdb) nicht weiter einzugrenzen"
       }
     }
   },
