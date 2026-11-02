@@ -124,6 +124,15 @@
                  const int t2 = gg::expert_type(l.lay, 2);
                  const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
                  CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
+@@ -4290,7 +4333,7 @@
+                     std::fwrite(yv.data(), 4, yv.size(), dump_y);
+                     std::fflush(dump_y);
+                 }
+-                moe_combine(c.acc, c.y, c.pos, c.rw, T, l.k_exp, a, a + nrows, D, d.st);
++                moe_combine(c.acc, c.y, c.pos, c.rw, T, l.k_exp, a, a + nrows, D, d.st, c.C, c.C * kPicks);
+             }
+             i0 = j;
+         }
 @@ -4328,9 +4371,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
@@ -403,9 +412,66 @@
          blob = (const uint8_t*) p;
          m0 = grp;
          m1 = grp + 1;
+@@ -739,6 +740,8 @@
+     __shared__ float xs[RM][33];
+     __shared__ int src[RM];
+     const int e = blockIdx.z;
++    // K100AI guard: an expert index past the set must not touch bounds/blob at all
++    if (e < 0 || e >= a.n_exp) return;
+     const int lo = a.bounds[e] - a.row0, hi = a.bounds[e + 1] - a.row0;
+     const int r0 = lo + blockIdx.x * RM;
+     if (r0 >= hi || hi - lo <= a.skip_le) return;   // (uniform; skip_le: the light kernels' experts)
 --- a/src/dsv41/ds4_kernels.cu
 +++ b/src/dsv41/ds4_kernels.cu
-@@ -2574,13 +2574,13 @@
+@@ -2070,15 +2070,28 @@
+ }
+ 
+ __global__ void moe_combine_kernel(float* acc, const float* __restrict__ y, const int* __restrict__ pos,
+-                                   const float* __restrict__ w, int k, int r0, int r1, int dim) {
++                                   const float* __restrict__ w, int k, int r0, int r1, int dim, int y_rows, int pos_n) {
+     const int e = blockIdx.x * blockDim.x + threadIdx.x, t = blockIdx.y;
+     if (e >= dim) return;
+     float a = acc[(size_t) t * dim + e];
+     bool any = false;
+     for (int i = 0; i < k; ++i) {
+-        const int r = pos[(size_t) t * kPicks + i];
++        const size_t pi = (size_t) t * kPicks + i;
++        // K100AI: report (once a thread) what does not fit, instead of faulting on it
++        if (pos_n > 0 && pi >= (size_t) pos_n) {
++            if (e == 0) printf("COMBINE-BAD pos: t %d i %d pi %zu pos_n %d T %d k %d\n", t, i, pi, pos_n, gridDim.y, k);
++            continue;
++        }
++        const int r = pos[pi];
+         if (r < r0 || r >= r1) continue;
+-        a = __fmaf_rn(w[(size_t) t * kPicks + i], y[(size_t) (r - r0) * dim + e], a);
++        const int row = r - r0;
++        if (y_rows > 0 && row >= y_rows) {
++            if (e == 0)
++                printf("COMBINE-BAD y: t %d i %d r %d r0 %d r1 %d row %d y_rows %d dim %d\n", t, i, r, r0, r1, row,
++                       y_rows, dim);
++            continue;
++        }
++        a = __fmaf_rn(w[pi], y[(size_t) row * dim + e], a);
+         any = true;
+     }
+     if (any) acc[(size_t) t * dim + e] = a;
+@@ -2405,12 +2418,13 @@
+     strata_ds4_launch(moe_sort_kernel<true>, n_vs, kThreads, 0, s, idx, T, k, vs, bounds, row_tok, pos);
+ }
+ void moe_combine(float* acc, const float* y, const int* pos, const float* w, int T, int k, int r0, int r1, int dim,
+-                 cudaStream_t s) {
++                 cudaStream_t s, int y_rows, int pos_n) {
+     if (r1 > r0 && T > 0) {
+ #if defined(STRATA_METAL)
+         if (strata::dsv41::metal_host::moe_combine(acc, y, pos, w, T, k, r0, r1, dim)) return;
+ #endif
+-        strata_ds4_launch(moe_combine_kernel, dim3(cdiv(dim, kThreads), T), kThreads, 0, s, acc, y, pos, w, k, r0, r1, dim);
++        strata_ds4_launch(moe_combine_kernel, dim3(cdiv(dim, kThreads), T), kThreads, 0, s, acc, y, pos, w, k, r0, r1, dim,
++                          y_rows, pos_n);
+     }
+ }
+ 
+@@ -2574,13 +2588,13 @@
                  scr->cap, scr->rows, T, a.gen ? 1 : (T < kWin ? T : kWin), kv_row_bytes(kKvFp4, 512))) return;
  #endif
          strata_ds4_launch(unpack_sel_kernel, dim3(cdiv(sel_stride, kStage), T), kThreads, 0, s, (const uint8_t*) ckv, sel, sel_stride, a,
@@ -423,6 +489,48 @@
              strata_ds4_launch(sparse_attn_kernel<true, 0>, dim3(heads, T), kThreads, 0, s, q, win, scr->rows, nullptr, scr->cap, a, sink,
                                                                               heads, d, scale, out);
          return;
+--- a/src/dsv41/ds4_kernels.cuh
++++ b/src/dsv41/ds4_kernels.cuh
+@@ -254,8 +254,9 @@
+ void moe_sort(const int* idx, int T, int k, const int* vs, int n_vs, int* bounds, int* row_tok, int* pos,
+               cudaStream_t s);
+ /// acc[t] += w[t][i] * y[pos[t][i] - r0] for each pick of t (in pick order) whose sorted row is in [r0, r1).
++// K100AI: y_rows/pos_n are the capacities of y (in rows) and pos (in entries); 0 keeps the old behaviour
+ void moe_combine(float* acc, const float* y, const int* pos, const float* w, int T, int k, int r0, int r1, int dim,
+-                 cudaStream_t s);
++                 cudaStream_t s, int y_rows = 0, int pos_n = 0);
+ /// rows[t][0] = 1, the rest 0 (the first layer's pre-mix: stream 0).
+ void init_pre(float* pre, int T, cudaStream_t s);
+ 
+--- a/src/dsv41/ds4_launch.h
++++ b/src/dsv41/ds4_launch.h
+@@ -11,11 +11,25 @@
+                                  cudaStream_t stream, CA&&... args) {
+     static const bool prelog = std::getenv("DS4_PRELOG") != nullptr;   // K100AI probe: the last line before a fault kills the process is the launch that caused it
+     if (prelog) {
+-        std::fprintf(stderr, "L %s:%d %u,%u,%u %u,%u,%u %zu\n", file, line,
++        int pdev = -1;
++        (void) cudaGetDevice(&pdev);   // K100AI: which card this launch went to (two members interleave their lines)
++        std::fprintf(stderr, "L d%d %s:%d %u,%u,%u %u,%u,%u %zu\n", pdev, file, line,
+                      grid.x, grid.y, grid.z, block.x, block.y, block.z, shared);
+         std::fflush(stderr);
+     }
+     kernel<<<grid, block, shared, stream>>>(static_cast<KA>(args)...);
++    // DS4_LAUNCH_SYNC: drain the stream after every launch, so an asynchronous fault (a bad address in a kernel)
++    // is reported against the launch that caused it instead of some later call
++    static const bool sync_each = std::getenv("DS4_LAUNCH_SYNC") != nullptr;
++    if (sync_each) {
++        const cudaError_t se = cudaStreamSynchronize(stream);
++        if (se != cudaSuccess) {
++            std::fprintf(stderr, "ds4 launch FAULT at %s:%d: %s (grid %u,%u,%u block %u,%u,%u shared %zu)\n", file,
++                         line, cudaGetErrorString(se), grid.x, grid.y, grid.z, block.x, block.y, block.z, shared);
++            std::fflush(stderr);
++            std::abort();
++        }
++    }
+     static const bool check = std::getenv("DS4_LAUNCH_CHECK") != nullptr;   // report the launch that failed (not a later call)
+     if (check) {
+         cudaError_t e = cudaGetLastError();
 --- a/src/dsv41/vendor/moe_win.cu
 +++ b/src/dsv41/vendor/moe_win.cu
 @@ -24,7 +24,8 @@

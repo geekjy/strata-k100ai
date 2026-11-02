@@ -524,7 +524,17 @@
             "der Experten-Index-Guard in set_kernel hat nichts geaendert (e ist also nicht die Ursache)"
           ],
           "open": "die Indizes von moe_combine sind unter den geprueften Annahmen gueltig - es bleibt eine Inkonsistenz zwischen pos/r0/r1 und der Groesse von c.y, die nur ein Device-Debugger oder ein Guard mit Kapazitaetswerten klaert"
-        }
+        },
+        "guard_round": {
+          "done": [
+            "moe_combine_kernel bekommt jetzt die Kapazitaeten von y (c.C) und pos (c.C*kPicks) und klemmt statt zu faulten; Ausreisser werden per printf gemeldet",
+            "ein Experten-Index-Guard in set_kernel (e < n_exp) kam dazu",
+            "die PRELOG-Spur traegt die Device-Id"
+          ],
+          "result": "kein COMBINE-BAD, aber der VMFault bleibt; die letzte Launch-Zeile auf Device 1 ist weiterhin moe_combine_kernel (jetzt 2427 = 2412 + die 15 eingefuegten Zeilen)",
+          "conclusion": "der Ausreisser liegt nicht in pos/y (die sind jetzt geklemmt), sondern in acc/w oder in einem Pointer, der zur Laufzeit nicht mehr gueltig ist - das laesst sich ohne Device-Debugger nicht mehr eingrenzen"
+        },
+        "recommendation": "rocgdb am VMFault (oder ein HIP-Breakpoint im Kernel) fuer die letzte Meile; die Guards bleiben als Haertung drin"
       }
     }
   },
