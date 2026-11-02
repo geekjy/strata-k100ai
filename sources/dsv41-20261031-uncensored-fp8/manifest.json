@@ -676,7 +676,7 @@
           "why_that_is_not_a_real_finding": "die Guard-Werte sind Geraete-Globals und damit ZWISCHEN DEN BEIDEN MEMBERS GETEILT: waehrend Member 0 laeuft, kann Member 1 sie schon ueberschrieben haben - der Abstand von genau 3 Strifts ist die Signatur des anderen Members, nicht ein Fehler im Kernel",
           "conclusion": "ein Guard ueber Geraete-Globals ist fuer zwei Members unbrauchbar; die Werte muessten pro Launch durch die Argumente gehen (dafuer muesste man die SetArgs-Struktur durch x3 und iq durchreichen)"
         },
-        "status": "offen; 12 Hypothesen ausgeschlossen, inklusive Daten/Quantisierung",
+        "status": "14 Hypothesen ausgeschlossen; der Fehler tritt ausschliesslich bei 2 Mitgliedern x Experten-TP x Chunk-Pfad auf, mit gueltigen Eingaben, an wechselnden Instruktionen",
         "capacities_in_the_args": {
           "done": "die Kapazitaeten reisen jetzt PRO LAUNCH in SetArgs (rows_cap, bounds_cap, idx_cap, tok_cap); dafuer wurden beide SetArgs (include/strata/dsv41/exl3.hpp und src/dsv41/ds4_iq.cuh) und die Kopie in iq_set() erweitert",
           "why": "ein Guard ueber Geraete-Globals ist mit zwei Mitgliedern nicht auswertbar (die Globals sind geteilt)",
@@ -712,7 +712,15 @@
           "test": "derselbe Experten-TP-Lauf mit pack4 (die ORIGINALEN MXFP4-Experten, 508 GB) und mit pack7 (eigene IQ2_XXS)",
           "result": "BEIDE stuerzen ab (pack4: VMFault, pack7: VMFault) - die Quantisierung ist damit ausgeschlossen",
           "note": "das offizielle Repo (unsloth) hat UD-IQ2_XXS, also denselben Typ; ein Wechsel dorthin wuerde nichts aendern"
-        }
+        },
+        "further_refutations": {
+          "chunk_allreduce": "mit DS4_NO_CHUNK_AR an allen drei Aufrufstellen abgeschaltet -> stuerzt weiter ab",
+          "hard_clamp_on_the_stores": "CLAMP (idx < rows_cap*ldo, die echte Puffergroesse) -> 0 Meldungen, stuerzt weiter ab",
+          "member_serialisation": "DS4_SERIALIZE (Mutex um jeden run_set-Aufruf, also nie zwei Kernel-Starts gleichzeitig) -> stuerzt weiter ab",
+          "plan_streams_timing": "wird genau einmal vor dem Lauf aufgerufen (Zeile 9516) - kein Rennen",
+          "chunk_go": "ist nur die Stop-/Abbruchlogik, keine Chunk-Zuteilung"
+        },
+        "what_is_needed": "ein Geraete-Debugger mit GPU-Speicherzugriff (Variables/Locals lesen) oder Unterstuetzung durch Hygon; mit den Bordmitteln ist die Grenze erreicht"
       },
       "dual_card_plan": {
         "single_request": "Experten-TP (beide Karten zugleich) - durch diesen Bug blockiert; hipgdb ist der Weg",
