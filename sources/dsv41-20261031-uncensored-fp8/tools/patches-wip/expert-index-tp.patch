@@ -73,7 +73,21 @@
          }
          // which devices hold each source's compressed KV / index keys
          for (Src& s : srcs) {
-@@ -3593,7 +3623,8 @@
+@@ -3407,7 +3437,12 @@
+                       dalloc(d, c.rw, C * kPicks, err) && dalloc(d, c.bounds, 2048, err) &&
+                       dalloc(d, c.row_tok, C * kPicks, err) && dalloc(d, c.pos, C * kPicks, err) &&
+                       dalloc(d, c.sg, C * FF, err) && dalloc(d, c.su, C * FF, err) && dalloc(d, c.sh16, C * FF, err) &&
+-                      dalloc(d, c.h16, (C + kH16Pad) * FF, err) && dalloc(d, c.y, C * D, err) && dalloc(d, c.w16, c.w16_elems, err) &&
++                      dalloc(d, c.h16, (C + kH16Pad) * FF, err) &&
++                      // K100AI canary: 2048 rows right behind y; a write past y's C rows lands in mapped memory,
++                      // so it is reported instead of faulting - and it names the layer and the distance
++                      dalloc(d, c.y, (size_t) (C + 2048) * D, err) &&
++                      (cudaMemsetAsync(c.y + (size_t) C * D, 0, (size_t) 2048 * D * 4, d.st) == cudaSuccess ? true : false) &&
++                      dalloc(d, c.w16, c.w16_elems, err) &&
+                       halloc(c.bounds_pin, 2048, err);
+             if (!ok) return false;
+             if (has_first && !dalloc(d, c.emb, C * D, err)) return false;
+@@ -3593,7 +3628,8 @@
              // pinned staging as its blob) or from the file's mapping
              auto mat_r = [&](int r) { return src != nullptr ? src + l.lay.trellis[r] : mx_mat(l, e, r); };
              bool ok = true;
@@ -83,7 +97,7 @@
                  if (src != nullptr)
                      ok = cudaMemcpyAsync(dst, src, l.blob, cudaMemcpyHostToDevice, cs) == cudaSuccess;
                  else
-@@ -3800,12 +3831,14 @@
+@@ -3800,12 +3836,14 @@
      // this offset in the matrix, this long; the down the whole matrix (its part, the blocks [m n_ff / nm / 32, ..) of
      // every row, is DMA'd out of it row by row); alone (nm 1) every matrix whole
      size_t mx_read_off(const Layer& l, int m, int r) const {
@@ -102,7 +116,7 @@
      }
      // the device's member index in L0's group (0 alone)
      int flow_mi(const Chunk& c, const Layer& L0) const {
-@@ -4111,9 +4144,19 @@
+@@ -4111,9 +4149,19 @@
                  ++c.n_dma;
                  continue;
              }
@@ -124,7 +138,7 @@
                  const int t2 = gg::expert_type(l.lay, 2);
                  const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
                  CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
-@@ -4197,6 +4240,9 @@
+@@ -4197,6 +4245,9 @@
              int j = i0 + 1;
              while (j < i1 && b[j + 1] - b[i0] <= c.C) ++j;
              const int a = b[i0], nrows = b[j] - a;
@@ -134,16 +148,30 @@
              int max_rows = 0;
              for (int i = i0; i < j; ++i) max_rows = std::max(max_rows, b[i + 1] - b[i]);
              if (nrows > 0) {
-@@ -4290,7 +4336,7 @@
+@@ -4290,7 +4341,21 @@
                      std::fwrite(yv.data(), 4, yv.size(), dump_y);
                      std::fflush(dump_y);
                  }
 -                moe_combine(c.acc, c.y, c.pos, c.rw, T, l.k_exp, a, a + nrows, D, d.st);
 +                moe_combine(c.acc, c.y, c.pos, c.rw, T, l.k_exp, a, a + nrows, D, d.st, c.C, c.C * kPicks);
++                if (std::getenv("DS4_YGUARD")) {   // K100AI canary check: is the guard behind y dirty?
++                    static const size_t win = 256 * 1024;   // (the first 51 rows of the guard)
++                    static std::vector<float> hv(win / 4);
++                    CK(cudaMemcpyAsync(hv.data(), c.y + (size_t) c.C * D, win, cudaMemcpyDeviceToHost, d.st));
++                    CK(cudaStreamSynchronize(d.st));
++                    for (size_t q = 0; q < hv.size(); ++q)
++                        if (hv[q] != 0.0f) {
++                            std::fprintf(stderr,
++                                         "YGUARD: layer %d: the guard behind y is dirty at row %zu (value %g) - "
++                                         "something wrote past y's %d rows\n",
++                                         l.il, q / (size_t) D, (double) hv[q], c.C);
++                            break;
++                        }
++                }
              }
              i0 = j;
          }
-@@ -4328,9 +4374,15 @@
+@@ -4328,9 +4393,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -162,7 +190,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4700,20 @@
+@@ -4648,6 +4719,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -183,7 +211,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4780,22 @@
+@@ -4714,6 +4799,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -206,7 +234,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4875,18 @@
+@@ -4793,9 +4894,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -227,7 +255,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4932,10 @@
+@@ -4841,9 +4951,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -240,7 +268,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5345,7 @@
+@@ -5253,7 +5364,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -249,7 +277,7 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8368,17 +8460,23 @@
+@@ -8368,17 +8479,23 @@
              route(c.glog + (size_t) r0 * 1024, l.gate_bias, l.n_exp, l.k_exp, nr, g.route_scale,
                    c.ridx + (size_t) r0 * kPicks, c.rw + (size_t) r0 * kPicks, s, l.gate_bias_vl, vl ? &vb : nullptr);
          }
@@ -279,7 +307,7 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -8515,7 +8613,27 @@
+@@ -8515,7 +8632,27 @@
              for (int m = 0; m < l.nm; ++m) {   // (a group's members: each its own copy)
                  Layer& x = member(l, m);
                  int j = 0;
@@ -308,7 +336,7 @@
              }
          }
      }
-@@ -10051,13 +10169,19 @@
+@@ -10051,13 +10188,19 @@
              const size_t per = (size_t) cols * (ehd + ehd / 32);
              eg_finish(*eg_win[(size_t) l.eg]);   // (asked for when the window began)
              uint8_t* src = h_eg + (size_t) l.eg * eg_cap * per;
@@ -334,7 +362,7 @@
              engram_dequant(d.eg_rows, sc, T * cols, ehd, d.eg_x, s, (int) eg_fmt[(size_t) l.eg]);
              dump_sub(d, "eg_rows", l.il, p0, T, d.eg_rows, (size_t) T * cols * ehd);
              dump_sub(d, "eg_x", l.il, p0, T, d.eg_x, (size_t) T * cols * ehd * 4);
-@@ -10360,9 +10484,12 @@
+@@ -10360,9 +10503,12 @@
              route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                            d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
                            na[1], l.il);
@@ -350,7 +378,7 @@
              prof_mark(d, 2);
              const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
              if (T == 1 && moe_token_path) {
-@@ -10399,8 +10526,11 @@
+@@ -10399,8 +10545,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -364,7 +392,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10558,9 @@
+@@ -10428,7 +10577,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -375,7 +403,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10574,10 @@
+@@ -10442,6 +10593,10 @@
                      return false;
                  }
              }

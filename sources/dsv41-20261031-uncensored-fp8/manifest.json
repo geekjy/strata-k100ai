@@ -546,7 +546,20 @@
             "fault_address": "0x7f3c2bba0000 = 9299 Zeilen hinter y's Basis, also ~1107 Zeilen hinter dem Ende von y (8192 Zeilen)"
           },
           "conclusion": "der Ausreisser liegt in c.y, aber nicht in den geklemmten Indizes (pos/y-Index, Set-Groesse) - irgendein anderer Zugriff (oder ein Zeiger, der auf c.y zeigt und mit einem absoluten statt relativen Zeilenindex arbeitet) schreibt dort. Ohne Debugger/Watchpoint nicht weiter einzugrenzen."
-        }
+        },
+        "working_envelope": {
+          "found_by": "Grenzen abtasten statt raten: Prefill-Chunk-Groesse und Prompt-Laenge getrennt variiert",
+          "matrix": {
+            "--prefill-chunk 4096, 4k Prompt": "VMFault",
+            "--prefill-chunk 2048, 4k Prompt": "VMFault",
+            "--prefill-chunk 1024, 4k Prompt": "OK - 107.44 tok/s Prefill, 23.43 tok/s Decode, Ausgabe korrekt (671,6102,294,8760,344,11111,16,1)",
+            "--prefill-chunk 1024, 6k Prompt": "VMFault",
+            "--prefill-chunk 1024, 10k Prompt": "VMFault"
+          },
+          "conclusion": "der Fehler haengt an BEIDEN: der Chunk-Groesse (ab 2048 bricht es) und der Gesamtlaenge (ueber ~4k bricht es auch mit 1024er Chunks). Ein einzelner Puffer allein erklaert das nicht",
+          "practical_limit": "Experten-TP ist mit --prefill-chunk 1024 bis etwa 4080 Prompt-Token benutzbar und liefert dort korrekte Ausgaben"
+        },
+        "canary_result": "die y-Canary (2048 Zeilen direkt hinter c.y, mit Pruefung je Schicht) wurde nie schmutzig - der Ausreisser liegt also NICHT hinter c.y; die fruehere Adresskorrelation war ein Zufall"
       }
     }
   },
