@@ -652,7 +652,21 @@
           ],
           "registers": "s[2:3] = 0x7f6747f72600 als Basis, v1 = 0 in allen Lanes; danach v_readfirstlane_b32 s2, v55 (ein uniformer Skalar-Load, verbreitet auf alle Lanes)",
           "interpretation": "der Offset ist 0, die Basis selbst ist nicht gemappt. Da PTRCHECK alle acht Parameter als Geraetezeiger bestaetigt, muss die Basis ein aus einem Zeiger abgeleiteter Wert sein (Zeiger + Index), der hinter seine Allokation zeigt"
-        }
+        },
+        "o0_build": {
+          "build": "CMAKE_BUILD_TYPE=Debug (ueberall -O0) plus -g in den HIP-Flags, Binary 75.5 MB, baut sauber",
+          "run": "der VMFault reproduziert sich auch bei -O0 - es ist also KEIN Optimierungsartefakt",
+          "but": "auch bei -O0 sind alle Variablen 'optimized out': die Werte liegen in GPU-Registern/GPU-Speicher, und dieses hipgdb kann nur die in den Host-Adressraum gemappten Register lesen",
+          "limit": "damit ist die Geraeteseite mit diesem Werkzeug am Ende: Instruktion und SGPRs sind lesbar, die Argumente/Locals nicht"
+        },
+        "address_arithmetic_check": {
+          "fault_minus_wbase": "0x7f23b8b01000 - 0x7f223b1f8800 = 0x19D908800, geteilt durch stride 9148416 ergibt 758.6 - also KEIN ganzzahliges Vielfaches",
+          "meaning": "der faultende Zugriff ist nicht wbase + e*stride; er gehoert zu einem anderen Puffer"
+        },
+        "what_remains": [
+          "Bereichspruefung im Kernel gegen mitgegebene Kapazitaeten (bounds_n, idx_n, h_rows, y_rows) - dann meldet der Kernel selbst, welcher Zugriff daneben liegt",
+          "oder den Fall an den Upstream-Projektinhaber geben: wir haben Kernel, Zeile, Instruktion, Register und die vollstaendige Ausschlussliste"
+        ]
       },
       "dual_card_plan": {
         "single_request": "Experten-TP (beide Karten zugleich) - durch diesen Bug blockiert; hipgdb ist der Weg",
