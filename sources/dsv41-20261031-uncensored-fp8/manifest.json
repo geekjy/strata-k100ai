@@ -743,6 +743,26 @@
       "dual_card_plan": {
         "single_request": "Experten-TP (beide Karten zugleich) - durch diesen Bug blockiert; hipgdb ist der Weg",
         "concurrent_requests": "zwei Instanzen, je eine Karte und ein Port - beide Karten arbeiten dann gleichzeitig, ohne Code-Risiko"
+      },
+      "production_deployment": {
+        "date": "2026-11-03",
+        "engine": "build-exp/strata-dsv41 (Experten-Index-TP) mit --tp 2",
+        "env": "DS4_EXPERT_TP=1 DS4_AR_RS2=1",
+        "pack": "pack7 (Q4_K dichte Tensoren + IQ2_XXS Experten, 350.3 GB)",
+        "dspark": "on",
+        "container": "dsv41-serve, --restart unless-stopped, port 8095",
+        "scripts": "/4T-02/strata-work/serve_pack7_tp.sh + dsv41-serve-p7tp.json (Rueckfall: serve_pack7.sh)",
+        "verification": {
+          "stability": "12 gemischte Anfragen (638 bis 9.999 Token): 12/12 ok, 0 Engine-Abstuerze",
+          "answer": "'The capital of France is Paris.'",
+          "decode": "30.5 tok/s mit DSpark (gemessen im Betrieb)",
+          "health": 200
+        },
+        "measured_earlier": {
+          "prefill_10200_tokens": "183.42 tok/s (Baseline: 134)",
+          "decode_without_dspark": "22.4 tok/s",
+          "decode_with_dspark": "30.5 tok/s"
+        }
       }
     }
   },
@@ -792,5 +812,5 @@
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   },
-  "production": "Kandidat: Experten-TP (beide Karten je Layer) mit pack7 + DSpark; Basis-Engine bleibt als Rueckfall"
+  "production": "Experten-TP (beide Karten je Layer), pack7 + DSpark, health 200, 12/12 stabil"
 }
