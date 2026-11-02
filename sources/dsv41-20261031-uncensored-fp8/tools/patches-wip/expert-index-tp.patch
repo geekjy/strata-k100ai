@@ -124,7 +124,17 @@
                  const int t2 = gg::expert_type(l.lay, 2);
                  const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
                  CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
-@@ -4290,7 +4333,7 @@
+@@ -4197,6 +4240,9 @@
+             int j = i0 + 1;
+             while (j < i1 && b[j + 1] - b[i0] <= c.C) ++j;
+             const int a = b[i0], nrows = b[j] - a;
++            if (nrows > c.C)   // K100AI: h/y hold c.C rows, so a set larger than that writes past them
++                std::fprintf(stderr, "SET-OVER: layer %d set [%d,%d) nrows %d > C %d (row0 %d)\n", l.il, i0, j, nrows,
++                             c.C, a);
+             int max_rows = 0;
+             for (int i = i0; i < j; ++i) max_rows = std::max(max_rows, b[i + 1] - b[i]);
+             if (nrows > 0) {
+@@ -4290,7 +4336,7 @@
                      std::fwrite(yv.data(), 4, yv.size(), dump_y);
                      std::fflush(dump_y);
                  }
@@ -133,7 +143,7 @@
              }
              i0 = j;
          }
-@@ -4328,9 +4371,15 @@
+@@ -4328,9 +4374,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -152,7 +162,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4697,20 @@
+@@ -4648,6 +4700,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -173,7 +183,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4777,22 @@
+@@ -4714,6 +4780,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -196,7 +206,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4872,18 @@
+@@ -4793,9 +4875,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -217,7 +227,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4929,10 @@
+@@ -4841,9 +4932,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -230,7 +240,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5342,7 @@
+@@ -5253,7 +5345,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -239,7 +249,7 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8368,17 +8457,23 @@
+@@ -8368,17 +8460,23 @@
              route(c.glog + (size_t) r0 * 1024, l.gate_bias, l.n_exp, l.k_exp, nr, g.route_scale,
                    c.ridx + (size_t) r0 * kPicks, c.rw + (size_t) r0 * kPicks, s, l.gate_bias_vl, vl ? &vb : nullptr);
          }
@@ -269,7 +279,7 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -8515,7 +8610,27 @@
+@@ -8515,7 +8613,27 @@
              for (int m = 0; m < l.nm; ++m) {   // (a group's members: each its own copy)
                  Layer& x = member(l, m);
                  int j = 0;
@@ -298,7 +308,7 @@
              }
          }
      }
-@@ -10051,13 +10166,19 @@
+@@ -10051,13 +10169,19 @@
              const size_t per = (size_t) cols * (ehd + ehd / 32);
              eg_finish(*eg_win[(size_t) l.eg]);   // (asked for when the window began)
              uint8_t* src = h_eg + (size_t) l.eg * eg_cap * per;
@@ -324,7 +334,7 @@
              engram_dequant(d.eg_rows, sc, T * cols, ehd, d.eg_x, s, (int) eg_fmt[(size_t) l.eg]);
              dump_sub(d, "eg_rows", l.il, p0, T, d.eg_rows, (size_t) T * cols * ehd);
              dump_sub(d, "eg_x", l.il, p0, T, d.eg_x, (size_t) T * cols * ehd * 4);
-@@ -10360,9 +10481,12 @@
+@@ -10360,9 +10484,12 @@
              route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                            d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
                            na[1], l.il);
@@ -340,7 +350,7 @@
              prof_mark(d, 2);
              const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
              if (T == 1 && moe_token_path) {
-@@ -10399,8 +10523,11 @@
+@@ -10399,8 +10526,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -354,7 +364,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10555,9 @@
+@@ -10428,7 +10558,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -365,7 +375,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10571,10 @@
+@@ -10442,6 +10574,10 @@
                      return false;
                  }
              }
@@ -423,14 +433,28 @@
      if (r0 >= hi || hi - lo <= a.skip_le) return;   // (uniform; skip_le: the light kernels' experts)
 --- a/src/dsv41/ds4_kernels.cu
 +++ b/src/dsv41/ds4_kernels.cu
-@@ -2070,15 +2070,28 @@
+@@ -2069,16 +2069,42 @@
+     for (int s = 0; s < n_vs; ++s) bounds[s + 1] += bounds[s];
  }
  
++__device__ int kCombineTrace = 0;   // set by the launcher from DS4_COMBINE_TRACE
++__device__ __forceinline__ bool getenv_combine_trace() { return kCombineTrace != 0; }
++
  __global__ void moe_combine_kernel(float* acc, const float* __restrict__ y, const int* __restrict__ pos,
 -                                   const float* __restrict__ w, int k, int r0, int r1, int dim) {
 +                                   const float* __restrict__ w, int k, int r0, int r1, int dim, int y_rows, int pos_n) {
      const int e = blockIdx.x * blockDim.x + threadIdx.x, t = blockIdx.y;
      if (e >= dim) return;
++    // K100AI: acc/w are sized by T rows as well - report a T larger than the buffers instead of faulting
++    if (y_rows > 0 && (int) gridDim.y > y_rows) {
++        if (e == 0 && t == 0)
++            printf("COMBINE-BAD T: T(grid) %d > rows %d (pos_n %d dim %d) acc %p y %p pos %p w %p\n", (int) gridDim.y,
++                   y_rows, pos_n, dim, (const void*) acc, (const void*) y, (const void*) pos, (const void*) w);
++        return;
++    }
++    if (e == 0 && t == 0 && (getenv_combine_trace()))
++        printf("COMBINE-OK: T %d rows %d dim %d acc %p y %p pos %p w %p\n", (int) gridDim.y, y_rows, dim,
++               (const void*) acc, (const void*) y, (const void*) pos, (const void*) w);
      float a = acc[(size_t) t * dim + e];
      bool any = false;
      for (int i = 0; i < k; ++i) {
@@ -455,7 +479,7 @@
          any = true;
      }
      if (any) acc[(size_t) t * dim + e] = a;
-@@ -2405,12 +2418,13 @@
+@@ -2405,12 +2431,17 @@
      strata_ds4_launch(moe_sort_kernel<true>, n_vs, kThreads, 0, s, idx, T, k, vs, bounds, row_tok, pos);
  }
  void moe_combine(float* acc, const float* y, const int* pos, const float* w, int T, int k, int r0, int r1, int dim,
@@ -466,12 +490,16 @@
          if (strata::dsv41::metal_host::moe_combine(acc, y, pos, w, T, k, r0, r1, dim)) return;
  #endif
 -        strata_ds4_launch(moe_combine_kernel, dim3(cdiv(dim, kThreads), T), kThreads, 0, s, acc, y, pos, w, k, r0, r1, dim);
++        if (std::getenv("DS4_COMBINE_TRACE")) {
++            const int one = 1;
++            cudaMemcpyToSymbol(kCombineTrace, &one, sizeof one, 0, cudaMemcpyHostToDevice);
++        }
 +        strata_ds4_launch(moe_combine_kernel, dim3(cdiv(dim, kThreads), T), kThreads, 0, s, acc, y, pos, w, k, r0, r1, dim,
 +                          y_rows, pos_n);
      }
  }
  
-@@ -2574,13 +2588,13 @@
+@@ -2574,13 +2605,13 @@
                  scr->cap, scr->rows, T, a.gen ? 1 : (T < kWin ? T : kWin), kv_row_bytes(kKvFp4, 512))) return;
  #endif
          strata_ds4_launch(unpack_sel_kernel, dim3(cdiv(sel_stride, kStage), T), kThreads, 0, s, (const uint8_t*) ckv, sel, sel_stride, a,

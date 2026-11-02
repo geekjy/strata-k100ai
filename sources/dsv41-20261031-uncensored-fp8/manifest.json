@@ -351,7 +351,7 @@
         "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
-      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200, 'The capital of France is Paris.'",
+      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200",
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
         "cause": "DRITTE Stelle mit der Halb-Block-Annahme: der Streaming-Loader des Chunk-Pfads nahm bei nm>1 den Mitglieds-Zweig und kopierte nur ffh Zeilen in einen Ring-Slot, der fuer den ganzen Experten bemessen ist",
@@ -534,7 +534,19 @@
           "result": "kein COMBINE-BAD, aber der VMFault bleibt; die letzte Launch-Zeile auf Device 1 ist weiterhin moe_combine_kernel (jetzt 2427 = 2412 + die 15 eingefuegten Zeilen)",
           "conclusion": "der Ausreisser liegt nicht in pos/y (die sind jetzt geklemmt), sondern in acc/w oder in einem Pointer, der zur Laufzeit nicht mehr gueltig ist - das laesst sich ohne Device-Debugger nicht mehr eingrenzen"
         },
-        "recommendation": "rocgdb am VMFault (oder ein HIP-Breakpoint im Kernel) fuer die letzte Meile; die Guards bleiben als Haertung drin"
+        "recommendation": "rocgdb mit einem Watchpoint auf c.y + 8192 Zeilen, oder den Parallelmodus auf kurze Prompts begrenzen (dann ist er korrekt und schneller)",
+        "option_b_result": {
+          "done": [
+            "die Kapazitaeten von y (c.C) und pos (c.C*kPicks) gehen an moe_combine und werden dort geklemmt (kein Fault mehr an der Stelle, kein COMBINE-BAD)",
+            "ein Host-Invariant in run_set meldet, wenn ein Set groesser als c.C waere - feuert nie",
+            "die PRELOG-Spur traegt die Device-Id"
+          ],
+          "measured": {
+            "combine_pointers": "acc 0x7f3c51000000, y 0x7f3c20600000, pos 0x7f402dda8000, w 0x7f406c5b8000, rows 8192, T 4080",
+            "fault_address": "0x7f3c2bba0000 = 9299 Zeilen hinter y's Basis, also ~1107 Zeilen hinter dem Ende von y (8192 Zeilen)"
+          },
+          "conclusion": "der Ausreisser liegt in c.y, aber nicht in den geklemmten Indizes (pos/y-Index, Set-Groesse) - irgendein anderer Zugriff (oder ein Zeiger, der auf c.y zeigt und mit einem absoluten statt relativen Zeilenindex arbeitet) schreibt dort. Ohne Debugger/Watchpoint nicht weiter einzugrenzen."
+        }
       }
     }
   },
