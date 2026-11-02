@@ -493,7 +493,7 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "in run_set pruefen, ob d_bounds und c.row_tok wirklich Geraetezeiger sind (gegen die Arena-/Ring-Bereiche), oder den Kernel mit -O0 bauen und am Fehlerpunkt a.bounds/a.idx direkt lesen",
+        "next_step": "mit hipgdb am Fehlerpunkt 'info line *$pc' (mappt die Geraeteinstruktion auf die Quellzeile) oder einen -O0-Build der Geraeteseite, damit a.bounds/a.idx lesbar sind",
         "set_args_dumped": {
           "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
           "findings": [
@@ -625,6 +625,20 @@
           "key_observation": "alle Geraetepuffer liegen bei 0x7f2x/0x7f3x; 0x7f6747f72600 liegt im Bereich des Prozesses selbst (Code bei 0x7f67475e4xxx) - also wird ein HOST-Zeiger als Basis eines global_load benutzt",
           "sgpr_values": "s18 = 0x2e8800 = a.tr[1], s54 = 841 (Zeilen), s23/s32/s70 = 5120 (n_embd), s33 = 2304 (n_ff) - passen zu den Argument-Dumps",
           "conclusion": "ein 32-Bit-Skalarload (bounds[e] oder idx[r]) laeuft gegen einen Host-Zeiger; das erklaert 'Adresse ausserhalb jeder Allokation' und warum alle Kapazitaets-Guards still bleiben"
+        },
+        "ptrcheck": {
+          "method": "hipPointerGetAttributes fuer alle acht Zeiger, die der set-Kernel liest (bounds, idx, wbase, x16, h16, y, pos, acc), je run_set-Aufruf bei DS4_PTRCHECK",
+          "result": "0 Meldungen - alle acht sind echte Geraetezeiger"
+        },
+        "correction_host_pointer": {
+          "earlier_claim": "die Fehleradresse liege im Host-Adressraum, also werde ein Host-Zeiger dereferenziert",
+          "why_wrong": "hipgdb mappt das GPU-Code-Object in den Host-Adressraum; die Fehleradresse lag knapp neben diesem Mapping, war aber eine regulaere Geraeteadresse. PTRCHECK bestaetigt: alle Zeiger sind Geraetezeiger",
+          "status": "zurueckgezogen"
+        },
+        "fault_instruction": {
+          "instruction": "global_load_dword v55, v1, s[2:3] mit v1 = 0 in allen Lanes",
+          "meaning": "der Offset ist 0, also ist die Basis selbst nicht gemappt - der Zeiger zeigt hinter seine Allokation, nicht in eine falsche Speicherart",
+          "note": "die Basis war in diesem Lauf 0x7f6747f72600; das liegt neben dem Code-Object-Mapping, ist aber ein Geraetezeiger"
         }
       },
       "dual_card_plan": {
