@@ -352,9 +352,13 @@
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
-        "state": "build-exp --tp 2 --dspark auto, DS4_EXPERT_TP=7, pack7 (Q4_K)",
-        "revert_pack": "dsv41-serve.json (pack6) + serve_rs2.sh",
-        "revert_parallel": "serve_rs2.sh (Baseline, layer split)"
+        "state": "build-dsv41-full (Basis, Schicht-Split) + pack7 (Q4_K), --dspark on, restart unless-stopped",
+        "scripts": {
+          "stable": "serve_pack7.sh",
+          "parallel_short_prompts_only": "serve_exptp.sh",
+          "pack6_baseline": "serve_rs2.sh"
+        },
+        "open": "Chunk-Pfad des Experten-TP reparieren (VMFault ab ~2k Token), danach Parallelmodus wieder als Default"
       },
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
@@ -449,6 +453,14 @@
         "decode_dspark_on": "pack6 32.73 -> pack7 32.92 (median of 3); DSpark itself is worth +28% on pack7 (32.92 vs 25.74 without)",
         "conclusion": "der Modell-Anteil ist um ~22% gesunken, aber mit DSpark ist die Ende-zu-Ende-Rate jetzt von dessen Drafting/Verify gedeckelt - der naechste Hebel waere DSpark-Tuning, nicht das Modell",
         "quality": "'The capital of France is Paris.', 17*23 = 391, korrektes Python, 1479-Token-Prompt ohne Fehler"
+      },
+      "incident_2026_11_02_long_prompt": {
+        "symptom": "eine Anfrage mit 10.169 Prompt-Token endete mit 'the engine stopped unexpectedly (exit code -6)'",
+        "cause_1_oom": "das Kernel-Log zeigt den OOM-Killer: 'Out of memory: Killed process strata-dsv41, anon-rss 217 GB'. Der RAM-Store (139.9 GB) plus der Prefill-Puffer des 10k-Prompts plus der Page-Cache des 350-GB-Packs uebersteigen das, was der Container nutzen darf - er ist auf die NUMA-Knoten 1,3,5,7 festgelegt (mems_allowed=1,3,5,7), nicht auf die vollen 503 GB",
+        "cause_2_vmfault": "unabhaengig davon bricht der Experten-TP-Build bei Prompts ueber ~2000 Token mit einem GPU-VMFault ab (reproduziert bei 4k und 10k; die letzten Kernel sind ds4_iq.cu:1257/1248/1202). Validiert war nur bis 1700 Token - das war zu wenig",
+        "mitigation": "Produktion auf die stabile Basis-Engine umgestellt, aber mit pack7 (Q4_K) - der Quantisierungsgewinn bleibt, lange Prompts gehen wieder (12.639 Token verifiziert, 79 s), und der Container hat jetzt --restart unless-stopped",
+        "cost": "der Zwei-Karten-Parallelmodus ist aus, bis der Chunk-Pfad des Experten-TP repariert ist",
+        "measured_now": "25.2 / 20.03 / 31.82 / 27.75 tok/s (Mittel ~27), Qualitaet ok"
       }
     }
   },
