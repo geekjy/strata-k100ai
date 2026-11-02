@@ -351,7 +351,7 @@
         "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
-      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200, 'The capital of France is Paris.'",
+      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200",
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
         "cause": "DRITTE Stelle mit der Halb-Block-Annahme: der Streaming-Loader des Chunk-Pfads nahm bei nm>1 den Mitglieds-Zweig und kopierte nur ffh Zeilen in einen Ring-Slot, der fuer den ganzen Experten bemessen ist",
@@ -491,7 +491,7 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "den Absturz mit DS4_LAUNCH_CHECK=1 und einer Spur je Device (getrennte Dateien) fangen, um den Kernel sicher zu identifizieren; oder per Debugger am VMFault anhalten",
+        "next_step": "im set_kernel die Zeilenindizes pruefen (row_tok[bounds[i]..bounds[i+1]] gegen die Kapazitaet von h16/x16) und ob bounds/row0 fuer nm=2 anders skaliert werden als fuer nm=1",
         "set_args_dumped": {
           "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
           "findings": [
@@ -500,6 +500,17 @@
             "die Fehleradresse liegt AUSSERHALB jeder Allokation: 2.39 GB (ca. 261 Slots) hinter dem Ende der Layer-0-Arena von Member 0 und auch hinter dem Ende des Rings"
           ],
           "meaning": "der fehlerhafte Zugriff ist kein knapper Ueberlauf, sondern ein weiter Offset ins Nichts; die Set-Spur zeigt ihn nicht, also kommt er nicht aus den erfassten run_set-Aufrufen"
+        },
+        "deterministic_location": {
+          "method": "DS4_PRELOG (jede Launch-Zeile) plus DS4_LAUNCH_CHECK (das schon einen cudaDeviceSynchronize je Launch macht) - die letzte Zeile vor dem Fault ist die Ursache",
+          "last_launches": [
+            "ds4_iq.cu:1445 432,1,1",
+            "ds4_iq.cu:1257 20,16,1",
+            "ds4_iq.cu:1248 288,1,1",
+            "ds4_iq.cu:1202 124,36,1   <- der letzte, also der verursachende"
+          ],
+          "kernel": "ds4_iq.cu:1202 ist launch_set -> set_kernel, die Expertenmenge des Chunk-Pfads",
+          "combined_with_the_arg_dump": "die erfassten run_set-Aufrufe liegen alle in ihrer Arena; rows_total erreicht aber T*k_exp (~24480 bei 4k), und die Fehleradresse liegt ausserhalb jeder Allokation - der verbleibende Verdacht ist die Zeilen-/Aktivierungsindizierung im set_kernel (row0/row_tok/h16) bei grossen Zeilenzahlen, nicht der Blob-Zeiger"
         }
       }
     }
