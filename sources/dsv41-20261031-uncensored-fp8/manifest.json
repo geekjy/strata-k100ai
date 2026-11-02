@@ -493,7 +493,7 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "mit hipgdb einen Device-Breakpoint im set_kernel setzen und die Indizes (sr, lr, c) am Fehlerpunkt lesen - hipgdb kann das, es ist im Image",
+        "next_step": "hipgdb: Device-Breakpoint in iq::set_kernel, dann am Fehlerpunkt e/sr/lr/c lesen; der Host-Backtrace zeigt bereits den Kernel, die Debug-Symbole sind im RelWithDebInfo-Build vorhanden",
         "set_args_dumped": {
           "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
           "findings": [
@@ -604,6 +604,17 @@
             "der lr-Guard (g_setRowsCap) feuert nie: die Ausgabezeile ist in Ordnung"
           ],
           "fault_address_relation": "0x7f8b4e701000 liegt UNTER beiden Puffern (h 0x7f8bbfa00000, xf 0x7f8c61600000) - also kein Ueberlauf nach oben, sondern ein Zugriff mit negativem bzw. verdrehtem Index (oder auf einen anderen Puffer, der dort liegt)"
+        },
+        "arg_dump_extended": {
+          "example": "row0 2319 max_rows 64 | wbase 0x7f22471e9800 stride 9148416 | b 2319 2319 2383 2383 | idx 28 45 62 79",
+          "wbase_is_the_arena": "die wbase-Werte liegen ueber ~1.5 GB (0x7f223b..0x7f2252) und passen genau zu 164 Slots x 9.1 MB - die gedruckten Sets laufen also ueber die VRAM-Arena, nicht ueber den Ring",
+          "idx_values": "die idx-Eintraege sind Token-Nummern (28, 45, 62, 79 - kleiner als T), der down-Lauf hat idx = nullptr",
+          "bounds": "b[0..3] = 2319, 2319, 2383, 2383 - der erste Experte ist leer, der zweite hat 64 Zeilen"
+        },
+        "address_relation": {
+          "fault": "0x7f23b8b01000",
+          "against_wbase": "0x7f223b1f8800 -> Abstand ca. 6.94 GB = rund 796 Slots von 9.1 MB, also WEIT hinter den 3 Experten des Sets",
+          "conclusion": "der Zugriff liegt entweder in einer anderen Arena (die Adresse faellt in den Bereich der Layer-Arenen) oder ein Block rechnet mit einem e, das nicht zu n_exp = 3 passt - der e-Guard (e < n_exp) ist eingebaut und feuert nicht, deshalb ist der naechste Schritt ein echter Device-Breakpoint"
         }
       },
       "dual_card_plan": {
