@@ -493,7 +493,7 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "hipgdb: Device-Breakpoint in iq::set_kernel, dann am Fehlerpunkt e/sr/lr/c lesen; der Host-Backtrace zeigt bereits den Kernel, die Debug-Symbole sind im RelWithDebInfo-Build vorhanden",
+        "next_step": "in run_set pruefen, ob d_bounds und c.row_tok wirklich Geraetezeiger sind (gegen die Arena-/Ring-Bereiche), oder den Kernel mit -O0 bauen und am Fehlerpunkt a.bounds/a.idx direkt lesen",
         "set_args_dumped": {
           "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
           "findings": [
@@ -615,6 +615,16 @@
           "fault": "0x7f23b8b01000",
           "against_wbase": "0x7f223b1f8800 -> Abstand ca. 6.94 GB = rund 796 Slots von 9.1 MB, also WEIT hinter den 3 Experten des Sets",
           "conclusion": "der Zugriff liegt entweder in einer anderen Arena (die Adresse faellt in den Bereich der Layer-Arenen) oder ein Block rechnet mit einem e, das nicht zu n_exp = 3 passt - der e-Guard (e < n_exp) ist eingebaut und feuert nicht, deshalb ist der naechste Schritt ein echter Device-Breakpoint"
+        },
+        "interactive_hipgdb": {
+          "how": "interaktive SSH-Sitzung (persistentes PTY) -> Container mit -it -> hipgdb",
+          "device_debug": "mit -g in CMAKE_HIP_FLAGS hat die Geraeteseite Debug-Info; hipgdb haelt im Kernel an und zeigt Lane (HYCU Lane 2:9:2:257/0 (0,0,1)[64,0,0])",
+          "stop": "set_kernel<16, true, 64> (GATE_UP, IQ2_XXS) bei ds4_iq.cu:827",
+          "variables": "bei -O2 alle 'optimized out'; Registersicht funktioniert",
+          "faulting_instruction": "global_load_dword v55, v1, s[2:3] mit v1 = 0 in allen Lanes, Basis s[2:3] = 0x7f6747f72600",
+          "key_observation": "alle Geraetepuffer liegen bei 0x7f2x/0x7f3x; 0x7f6747f72600 liegt im Bereich des Prozesses selbst (Code bei 0x7f67475e4xxx) - also wird ein HOST-Zeiger als Basis eines global_load benutzt",
+          "sgpr_values": "s18 = 0x2e8800 = a.tr[1], s54 = 841 (Zeilen), s23/s32/s70 = 5120 (n_embd), s33 = 2304 (n_ff) - passen zu den Argument-Dumps",
+          "conclusion": "ein 32-Bit-Skalarload (bounds[e] oder idx[r]) laeuft gegen einen Host-Zeiger; das erklaert 'Adresse ausserhalb jeder Allokation' und warum alle Kapazitaets-Guards still bleiben"
         }
       },
       "dual_card_plan": {
