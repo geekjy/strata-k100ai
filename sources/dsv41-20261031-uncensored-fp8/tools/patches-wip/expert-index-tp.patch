@@ -102,16 +102,29 @@
      }
      // the device's member index in L0's group (0 alone)
      int flow_mi(const Chunk& c, const Layer& L0) const {
-@@ -4113,7 +4146,7 @@
+@@ -4111,9 +4144,19 @@
+                 ++c.n_dma;
+                 continue;
              }
-             for (int p = 0; p < 2; ++p)
+-            for (int p = 0; p < 2; ++p)
++            for (int p = 0; p < 2; ++p) {
++                // K100AI: a whole expert must fit the ring slot, or the copy walks into the next slot (a GPU fault
++                // later, far from here) - say so instead
++                if (lay.trellis[p] + mx_read_len(l, p) > c.ring_stride || lay.trellis[2] + mx_part_bytes(l, 2) > c.ring_stride) {
++                    err = "streamed expert does not fit the ring slot: layer " + std::to_string(l.il) + ", parts " +
++                          std::to_string(lay.trellis[0]) + "/" + std::to_string(mx_read_len(l, 0)) + " and " +
++                          std::to_string(mx_read_len(l, 1)) + ", down at " + std::to_string(lay.trellis[2]) + " + " +
++                          std::to_string(mx_part_bytes(l, 2)) + " > slot " + std::to_string(c.ring_stride);
++                    return false;
++                }
                  CK(cudaMemcpyAsync(dst + lay.trellis[p], it.src[p], mx_read_len(l, p), cudaMemcpyHostToDevice, c.cs));
 -            if (l.nm > 1) {   // (the down's part: in each of its rows the member's blocks)
++            }
 +            if (l.nm > 1 && !expert_tp_on()) {   // (the down's part: in each of its rows the member's blocks)
                  const int t2 = gg::expert_type(l.lay, 2);
                  const size_t dr = gg::type_row_bytes(t2, g.ff), dh = gg::type_row_bytes(t2, g.ff / l.nm);
                  CK(strata_memcpy2d_async(dst + lay.trellis[2], dh, it.src[2] + (size_t) it.mi * dh, dr, dh, (size_t) g.dim,
-@@ -4328,9 +4361,15 @@
+@@ -4328,9 +4371,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -130,7 +143,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4687,20 @@
+@@ -4648,6 +4697,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -151,7 +164,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4767,22 @@
+@@ -4714,6 +4777,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -174,7 +187,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4862,18 @@
+@@ -4793,9 +4872,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -195,7 +208,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4919,10 @@
+@@ -4841,9 +4929,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -208,7 +221,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5332,7 @@
+@@ -5253,7 +5342,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -217,7 +230,14 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8374,11 +8453,17 @@
+@@ -8368,17 +8457,23 @@
+             route(c.glog + (size_t) r0 * 1024, l.gate_bias, l.n_exp, l.k_exp, nr, g.route_scale,
+                   c.ridx + (size_t) r0 * kPicks, c.rw + (size_t) r0 * kPicks, s, l.gate_bias_vl, vl ? &vb : nullptr);
+         }
+-        const int n_vs = L0.n_slots + (int) L0.host_list.size();
++        const int n_vs = L0.n_slots + (int) L0.host_list.size() + (expert_tp_on() ? 1 : 0);   // K100AI: the dead slot
+         CK(cudaMemcpyAsync(l.vs_dev, l.vs_pin, (size_t) l.n_exp * 4, cudaMemcpyHostToDevice, s));   // (this member's)
+         moe_sort(c.ridx, T, l.k_exp, l.vs_dev, n_vs, c.bounds, c.row_tok, c.pos, s);
          CK(cudaMemcpyAsync(c.bounds_pin, c.bounds, (size_t) (n_vs + 1) * 4, cudaMemcpyDeviceToHost, s));
          prof_mark(d, 10);
          // the shared expert into acc while the host waits for the bounds
@@ -240,7 +260,36 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -10051,13 +10136,19 @@
+@@ -8515,7 +8610,27 @@
+             for (int m = 0; m < l.nm; ++m) {   // (a group's members: each its own copy)
+                 Layer& x = member(l, m);
+                 int j = 0;
+-                for (int e = 0; e < l.n_exp; ++e) x.vs_pin[e] = l.slot[(size_t) e] >= 0 ? l.slot[(size_t) e] : l.n_slots + j++;
++                for (int e = 0; e < l.n_exp; ++e) {
++                    // K100AI-EXPTP: with whole experts a slot number means a DIFFERENT expert on each member, so a
++                    // peer's resident expert must not be addressed here at all: it gets the dead slot l.n_slots, whose
++                    // rows no run_set walks (the peer computes it, the all-reduce adds it once)
++                    const bool mine = !expert_tp_on() || (e >= x.e0 && e < x.e0 + x.en);
++                    if (l.slot[(size_t) e] < 0) x.vs_pin[e] = l.n_slots + j++;
++                    else x.vs_pin[e] = mine ? l.slot[(size_t) e] : l.n_slots + (int) l.host_list.size();
++                }
++                if (std::getenv("DS4_VS_TRACE") && l.il == 0) {   // K100AI: is a peer's expert mapped into this
++                    // member's own arena slots? (it would then be read with the wrong weights)
++                    int foreign = 0, mine = 0, host = 0, first = -1;
++                    for (int e = 0; e < l.n_exp; ++e) {
++                        const bool owned = !expert_tp_on() || (e >= x.e0 && e < x.e0 + x.en);
++                        if (l.slot[(size_t) e] < 0) ++host;
++                        else if (owned) ++mine;
++                        else { if (foreign++ == 0) first = e; }
++                    }
++                    std::fprintf(stderr, "VS-TRACE: layer %d member %d: own %d peer-resident %d host %d (n_slots %d, e0 %d en %d) first peer e%d -> vs %d\n",
++                                 l.il, m, mine, foreign, host, l.n_slots, x.e0, x.en, first,
++                                 first >= 0 ? x.vs_pin[first] : -1);
++                }
+             }
+         }
+     }
+@@ -10051,13 +10166,19 @@
              const size_t per = (size_t) cols * (ehd + ehd / 32);
              eg_finish(*eg_win[(size_t) l.eg]);   // (asked for when the window began)
              uint8_t* src = h_eg + (size_t) l.eg * eg_cap * per;
@@ -266,7 +315,7 @@
              engram_dequant(d.eg_rows, sc, T * cols, ehd, d.eg_x, s, (int) eg_fmt[(size_t) l.eg]);
              dump_sub(d, "eg_rows", l.il, p0, T, d.eg_rows, (size_t) T * cols * ehd);
              dump_sub(d, "eg_x", l.il, p0, T, d.eg_x, (size_t) T * cols * ehd * 4);
-@@ -10360,9 +10451,12 @@
+@@ -10360,9 +10481,12 @@
              route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                            d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
                            na[1], l.il);
@@ -282,7 +331,7 @@
              prof_mark(d, 2);
              const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
              if (T == 1 && moe_token_path) {
-@@ -10399,8 +10493,11 @@
+@@ -10399,8 +10523,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -296,7 +345,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10525,9 @@
+@@ -10428,7 +10555,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -307,7 +356,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10541,10 @@
+@@ -10442,6 +10571,10 @@
                      return false;
                  }
              }

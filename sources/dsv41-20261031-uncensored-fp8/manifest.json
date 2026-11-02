@@ -353,8 +353,7 @@
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
         "state": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, --restart unless-stopped, health 200",
-        "verified": "'The capital of France is Paris.'",
-        "open": "Chunk-Pfad des Experten-TP (VMFault ab ~2k Token); solange laeuft die Produktion ohne Zwei-Karten-Parallelitaet"
+        "note": "nach jedem Test wurde der Dienst wiederhergestellt; aktuell laeuft er"
       },
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
@@ -481,7 +480,21 @@
           "die nm-unabhaengigen Aenderungen (tp1 laeuft)"
         ],
         "fault": "der letzte Kernel vor dem Absturz ist set_kernel (ds4_iq.cu:1202, Gitter 124x36) - die Expertenmenge des Chunk-Pfads",
-        "open": "bei --vram-experts 0 feuerte die run_set-Spur gar nicht, also laeuft dieser Fall ueber einen anderen Zweig (c.flow == false?) - dort weitersuchen"
+        "open": "bei --vram-experts 0 feuerte die run_set-Spur gar nicht, also laeuft dieser Fall ueber einen anderen Zweig (c.flow == false?) - dort weitersuchen",
+        "new": {
+          "vs_pin_collision_proven": "Trace in plan_streams (4k, tp2): member 0 'own 164 peer-resident 164 host 56, n_slots 164' und der erste Peer-Experte e192 bekam vs 108 - also einen Slot, der einem EIGENEN Experten gehoert. Ursache: mit ganzen Experten bedeutet eine Slot-Nummer auf jedem Member einen ANDEREN Experten (beim klassischen TP hielt jeder Member die halbe FFN jedes Experten, deshalb stimmte die Nummer).",
+          "fix_applied": "ein 'toter' virtueller Slot am ENDE des vs-Raums (n_slots + n_host): die Peer-Experten zeigen dorthin, ihre Zeilen rechnet kein run_set (die VRAM-Schleife endet bei n_slots, das Streaming deckt nur die Host-Slots) -> Beitrag 0, der Peer rechnet sie, das All-Reduce addiert sie einmal. n_vs waechst um 1.",
+          "fix_verified": "der Trace zaehlt die Peer-Experten jetzt auf den toten Slot; die Zuordnung ist konsistent",
+          "but": "der VMFault bleibt (4k: exit 139, 10k: exit 134) - es gibt also mindestens eine weitere Ursache im nm=2-Chunk-Pfad",
+          "control": "ohne das Feature faellt --tp 2 auf tp 1 zurueck ('tensor parallel 2 -> 1: the experts 256-value blocks split n_ff 2304 no other way'), laeuft also gar nicht im TP2 - dieser Pfad ist ausschliesslich mit dem Experten-TP erreichbar"
+        },
+        "still_ruled_out": [
+          "All-Reduce (alle drei Varianten)",
+          "VRAM-Arena (VMFault auch mit --vram-experts 0)",
+          "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
+          "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
+        ],
+        "next_step": "die Argumente des fehlenden set_kernel-Aufrufs dumpen (wbase, stride, i0/i1, bounds, row0/max_rows) und gegen die Allokationen pruefen; der Fehler tritt nur bei nm=2 und mehr als ~2000 Token auf"
       }
     }
   },
