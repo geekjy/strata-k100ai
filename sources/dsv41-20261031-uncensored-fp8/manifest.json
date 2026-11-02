@@ -493,7 +493,7 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "mit hipgdb am Fehlerpunkt 'info line *$pc' (mappt die Geraeteinstruktion auf die Quellzeile) oder einen -O0-Build der Geraeteseite, damit a.bounds/a.idx lesbar sind",
+        "next_step": "Geraeteseite mit -O0 bauen (dann sind a.bounds/a.idx/a.wbase am Fehlerpunkt lesbar) oder im Kernel eine Bereichspruefung gegen mitgegebene Kapazitaeten einbauen",
         "set_args_dumped": {
           "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
           "findings": [
@@ -639,6 +639,19 @@
           "instruction": "global_load_dword v55, v1, s[2:3] mit v1 = 0 in allen Lanes",
           "meaning": "der Offset ist 0, also ist die Basis selbst nicht gemappt - der Zeiger zeigt hinter seine Allokation, nicht in eine falsche Speicherart",
           "note": "die Basis war in diesem Lauf 0x7f6747f72600; das liegt neben dem Code-Object-Mapping, ist aber ein Geraetezeiger"
+        },
+        "line_mapping": {
+          "method": "hipgdb -batch: handle SIGSEGV stop, run, dann 'info line *$pc' und 'x/4i $pc-12'",
+          "result": "Line 827 of ds4_iq.cu (die Stelle, die h beschreibt; durch -O2-Inlining faellt die Zeilenzuordnung auf die Guard-Zeile)",
+          "instructions": [
+            "+62040 v_cndmask_b32_e32 v0, s0, v0, vcc",
+            "+62044 global_load_dword v55, v1, s[2:3]   <- der faultende Load",
+            "+62052 v_add_u32_e32 v56, s39, v0",
+            "+62056 v_ashrrev_i32_e32 v57, 31, v56",
+            "+62060 s_waitcnt vmcnt(0)                 <- hier schlaegt der Fehler auf"
+          ],
+          "registers": "s[2:3] = 0x7f6747f72600 als Basis, v1 = 0 in allen Lanes; danach v_readfirstlane_b32 s2, v55 (ein uniformer Skalar-Load, verbreitet auf alle Lanes)",
+          "interpretation": "der Offset ist 0, die Basis selbst ist nicht gemappt. Da PTRCHECK alle acht Parameter als Geraetezeiger bestaetigt, muss die Basis ein aus einem Zeiger abgeleiteter Wert sein (Zeiger + Index), der hinter seine Allokation zeigt"
         }
       },
       "dual_card_plan": {
@@ -692,5 +705,6 @@
       "dense_converted": "335 tensors, 13.08 GB -> 3.68 GB (Q6_K had been 5.37 GB)",
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
-  }
+  },
+  "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200"
 }
