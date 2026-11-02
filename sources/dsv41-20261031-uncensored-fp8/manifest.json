@@ -351,10 +351,7 @@
         "verdict": "Unterschied im Rauschen; kein belastbarer Gewinn"
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
-      "production": {
-        "state": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, --restart unless-stopped, health 200",
-        "note": "nach jedem Test wurde der Dienst wiederhergestellt; aktuell laeuft er"
-      },
+      "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200, 'The capital of France is Paris.'",
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
         "cause": "DRITTE Stelle mit der Halb-Block-Annahme: der Streaming-Loader des Chunk-Pfads nahm bei nm>1 den Mitglieds-Zweig und kopierte nur ffh Zeilen in einen Ring-Slot, der fuer den ganzen Experten bemessen ist",
@@ -494,7 +491,16 @@
           "Ring-Slot-Groesse (Grenzpruefung feuert nie)",
           "die nm-unabhaengigen Aenderungen (tp1 laeuft bei 4k)"
         ],
-        "next_step": "die Argumente des fehlenden set_kernel-Aufrufs dumpen (wbase, stride, i0/i1, bounds, row0/max_rows) und gegen die Allokationen pruefen; der Fehler tritt nur bei nm=2 und mehr als ~2000 Token auf"
+        "next_step": "den Absturz mit DS4_LAUNCH_CHECK=1 und einer Spur je Device (getrennte Dateien) fangen, um den Kernel sicher zu identifizieren; oder per Debugger am VMFault anhalten",
+        "set_args_dumped": {
+          "trace": "SET-TRACE je run_set: Layer, Member, Set-Bereich, n_exp, wbase..end, arena, n_slots, row0, max_rows, bounds, rows, T; dazu RING-TRACE fuer Ring- und Arena-Bereiche",
+          "findings": [
+            "alle erfassten Sets liegen in ihrer eigenen Arena (kein Ueberlauf, kein 'PAST THE ARENA')",
+            "die Ring-Slots sind 4 x 9.1 MB (36.6 MB), die Arenen 164 bzw. 159 Slots a 9.1 MB",
+            "die Fehleradresse liegt AUSSERHALB jeder Allokation: 2.39 GB (ca. 261 Slots) hinter dem Ende der Layer-0-Arena von Member 0 und auch hinter dem Ende des Rings"
+          ],
+          "meaning": "der fehlerhafte Zugriff ist kein knapper Ueberlauf, sondern ein weiter Offset ins Nichts; die Set-Spur zeigt ihn nicht, also kommt er nicht aus den erfassten run_set-Aufrufen"
+        }
       }
     }
   },
