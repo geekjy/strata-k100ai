@@ -476,7 +476,9 @@
           "combine-Indizes und Set-Groessen (geklemmt, melden nichts)",
           "Experten-Index",
           "All-Reduce-Varianten",
-          "VRAM-Arena vs Ring"
+          "VRAM-Arena vs Ring",
+          "bounds-unabhaengige Indexgrenzen",
+          "Kernel-seitige Bereichspruefung ueber Geraete-Globals (nicht mehrdeutbar mit zwei Members)"
         ],
         "fault": "der letzte Kernel vor dem Absturz ist set_kernel (ds4_iq.cu:1202, Gitter 124x36) - die Expertenmenge des Chunk-Pfads",
         "open": "bei --vram-experts 0 feuerte die run_set-Spur gar nicht, also laeuft dieser Fall ueber einen anderen Zweig (c.flow == false?) - dort weitersuchen",
@@ -666,7 +668,15 @@
         "what_remains": [
           "Bereichspruefung im Kernel gegen mitgegebene Kapazitaeten (bounds_n, idx_n, h_rows, y_rows) - dann meldet der Kernel selbst, welcher Zugriff daneben liegt",
           "oder den Fall an den Upstream-Projektinhaber geben: wir haben Kernel, Zeile, Instruktion, Register und die vollstaendige Ausschlussliste"
-        ]
+        ],
+        "in_kernel_range_guard": {
+          "implemented": "Geraete-Globals g_boundsCap/g_idxCap/g_blobLo/g_blobHi, per set_range_guard gesetzt; der Kernel prueft e+1 < boundsCap, row0+hi <= idxCap, lo/hi >= 0, blob innerhalb [blobLo,blobHi) und meldet per printf",
+          "first_run": "251 blob-Meldungen, aber alle systematisch um genau i0*stride verschoben - das war mein Fehler: die erlaubte Spanne muss bei sa.wbase beginnen",
+          "second_run": "269 blob-Meldungen, jetzt ist der Kernel-wbase systematisch 3 Strifts UNTER der erlaubten Spanne",
+          "why_that_is_not_a_real_finding": "die Guard-Werte sind Geraete-Globals und damit ZWISCHEN DEN BEIDEN MEMBERS GETEILT: waehrend Member 0 laeuft, kann Member 1 sie schon ueberschrieben haben - der Abstand von genau 3 Strifts ist die Signatur des anderen Members, nicht ein Fehler im Kernel",
+          "conclusion": "ein Guard ueber Geraete-Globals ist fuer zwei Members unbrauchbar; die Werte muessten pro Launch durch die Argumente gehen (dafuer muesste man die SetArgs-Struktur durch x3 und iq durchreichen)"
+        },
+        "status": "offen; die verbleibenden Wege: (a) Kapazitaeten durch die Argumente reichen (Struct-Aenderung in x3 und iq), (b) Upstream mit dem Belegpaket"
       },
       "dual_card_plan": {
         "single_request": "Experten-TP (beide Karten zugleich) - durch diesen Bug blockiert; hipgdb ist der Weg",
