@@ -148,7 +148,7 @@
              int max_rows = 0;
              for (int i = i0; i < j; ++i) max_rows = std::max(max_rows, b[i + 1] - b[i]);
              if (nrows > 0) {
-@@ -4208,6 +4259,32 @@
+@@ -4208,6 +4259,33 @@
                  sa.bounds = d_bounds + i0;
                  sa.row0 = a;
                  sa.max_rows = max_rows;
@@ -177,11 +177,12 @@
 +                sa.bounds_cap = 2048 - i0;
 +                sa.idx_cap = (int) (c.C * kPicks);
 +                sa.tok_cap = c.C;                     // K100AI: a row's token index must be < the chunk's tokens
++                sa.max_row = (int) (c.C * kPicks);    // K100AI: and no row index may exceed the row list
 +                if (std::getenv("DS4_SETDBG")) gg::iq::set_dbg_on(1);
  #if defined(STRATA_METAL)
                  sa.hbounds = b + i0;
                  sa.total_rows = nrows;
-@@ -4290,7 +4367,23 @@
+@@ -4290,7 +4368,23 @@
                      std::fwrite(yv.data(), 4, yv.size(), dump_y);
                      std::fflush(dump_y);
                  }
@@ -206,7 +207,7 @@
              }
              i0 = j;
          }
-@@ -4328,9 +4421,15 @@
+@@ -4328,9 +4422,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -225,7 +226,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4747,20 @@
+@@ -4648,6 +4748,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -246,7 +247,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4827,22 @@
+@@ -4714,6 +4828,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -269,7 +270,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4922,18 @@
+@@ -4793,9 +4923,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -290,7 +291,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4979,10 @@
+@@ -4841,9 +4980,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -303,7 +304,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5392,7 @@
+@@ -5253,7 +5393,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -312,7 +313,7 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8368,17 +8507,23 @@
+@@ -8368,17 +8508,23 @@
              route(c.glog + (size_t) r0 * 1024, l.gate_bias, l.n_exp, l.k_exp, nr, g.route_scale,
                    c.ridx + (size_t) r0 * kPicks, c.rw + (size_t) r0 * kPicks, s, l.gate_bias_vl, vl ? &vb : nullptr);
          }
@@ -342,7 +343,7 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -8515,7 +8660,27 @@
+@@ -8515,7 +8661,27 @@
              for (int m = 0; m < l.nm; ++m) {   // (a group's members: each its own copy)
                  Layer& x = member(l, m);
                  int j = 0;
@@ -371,7 +372,7 @@
              }
          }
      }
-@@ -10051,13 +10216,19 @@
+@@ -10051,13 +10217,19 @@
              const size_t per = (size_t) cols * (ehd + ehd / 32);
              eg_finish(*eg_win[(size_t) l.eg]);   // (asked for when the window began)
              uint8_t* src = h_eg + (size_t) l.eg * eg_cap * per;
@@ -397,7 +398,7 @@
              engram_dequant(d.eg_rows, sc, T * cols, ehd, d.eg_x, s, (int) eg_fmt[(size_t) l.eg]);
              dump_sub(d, "eg_rows", l.il, p0, T, d.eg_rows, (size_t) T * cols * ehd);
              dump_sub(d, "eg_x", l.il, p0, T, d.eg_x, (size_t) T * cols * ehd * 4);
-@@ -10360,9 +10531,12 @@
+@@ -10360,9 +10532,12 @@
              route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                            d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
                            na[1], l.il);
@@ -413,7 +414,7 @@
              prof_mark(d, 2);
              const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
              if (T == 1 && moe_token_path) {
-@@ -10399,8 +10573,11 @@
+@@ -10399,8 +10574,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -427,7 +428,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10605,9 @@
+@@ -10428,7 +10606,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -438,7 +439,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10621,10 @@
+@@ -10442,6 +10622,10 @@
                      return false;
                  }
              }
@@ -519,7 +520,7 @@
          blob = (const uint8_t*) p;
          m0 = grp;
          m1 = grp + 1;
-@@ -739,7 +756,33 @@
+@@ -739,7 +756,44 @@
      __shared__ float xs[RM][33];
      __shared__ int src[RM];
      const int e = blockIdx.z;
@@ -528,12 +529,23 @@
      const int lo = a.bounds[e] - a.row0, hi = a.bounds[e + 1] - a.row0;
 +    // K100AI range guard: say WHICH access leaves its buffer, instead of faulting.  The capacities come
 +    // with the launch (a device global would be shared by the two members and is therefore useless).
-+    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
++    if (threadIdx.x == 0) {   // K100AI: every block and every expert, not just the first
 +        const long long idx_end = (long long) a.row0 + hi;
 +        if (a.bounds_cap > 0 && e + 1 >= a.bounds_cap)
 +            printf("RANGE bounds: e+1 %d >= %d (row0 %d n_exp %d)\n", e + 1, a.bounds_cap, a.row0, a.n_exp);
 +        if (a.idx_cap > 0 && idx_end > a.idx_cap)
 +            printf("RANGE idx: needs %lld > %d (row0 %d hi %d)\n", idx_end, a.idx_cap, a.row0, hi);
++        // K100AI: the strides are the last unchecked inputs - a garbage ldo multiplies every row index
++        if (a.ldx <= 0 || a.ldx > 65536 || a.ldo <= 0 || a.ldo > 65536 || a.stride == 0 || a.stride > (size_t) (1 << 28))
++            printf("RANGE strides: ldx %d ldo %d stride %zu n_embd %d n_ff %d e %d\n", a.ldx, a.ldo, a.stride,
++                   a.n_embd, a.n_ff, e);
++        // K100AI: the VALUES in the row list, not just its length - a garbage bounds entry keeps lo/hi
++        // looking sane while pushing lr gigabytes away
++        if (a.max_row > 0 && (a.bounds[e] < 0 || a.bounds[e + 1] > a.max_row || a.bounds[e + 1] < a.bounds[e]))
++            printf("RANGE bounds value: [%d,%d] outside [0,%d] (e %d row0 %d)\n", a.bounds[e], a.bounds[e + 1],
++                   a.max_row, e, a.row0);
++        if (a.max_row > 0 && (long long) a.row0 + hi > a.max_row)
++            printf("RANGE rows absolute: row0 %d + hi %d = %lld > %d\n", a.row0, hi, (long long) a.row0 + hi, a.max_row);
 +        if (lo < 0 || hi < lo)
 +            printf("RANGE rows: lo %d hi %d (bounds %d..%d row0 %d)\n", lo, hi, a.bounds[e], a.bounds[e + 1], a.row0);
 +        if (a.rows_cap > 0 && hi > a.rows_cap)
@@ -553,7 +565,7 @@
      const int r0 = lo + blockIdx.x * RM;
      if (r0 >= hi || hi - lo <= a.skip_le) return;   // (uniform; skip_le: the light kernels' experts)
      if (a.skip_ge > 0 && hi - lo >= a.skip_ge) return;   // (the caller's FP16 GEMMs')
-@@ -773,6 +816,9 @@
+@@ -773,6 +827,9 @@
              const int r = i / 32, c = i % 32, sr = src[r];
              float v = 0.0f;
              if (sr >= 0) {
@@ -563,22 +575,34 @@
                  const size_t at = (size_t) sr * a.ldx + (size_t) kb * 32 + c;
                  v = GATE_UP ? a.xf[at] : __half2float(__ushort_as_half(a.xh[at]));
              }
-@@ -804,6 +850,12 @@
+@@ -804,11 +861,22 @@
          const int r = ty * RT + i;
          if (r >= nr) continue;
          const size_t lr = (size_t) (r0 + r);
 +        if (a.rows_cap > 0 && (int) lr >= a.rows_cap) {   // K100AI: never write past h/y
 +            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
-+                printf("SETCAP: lr %zu >= cap %d (e %d, lo %d hi %d row0 %d max_rows %d gateup %d)\n", lr, g_setRowsCap,
++                printf("SETCAP: lr %zu >= cap %d (e %d lo %d hi %d row0 %d max_rows %d gateup %d)\n", lr, a.rows_cap,
 +                       e, lo, hi, a.row0, a.max_rows, (int) GATE_UP);
 +            continue;
 +        }
  #pragma unroll
          for (int j = 0; j < TN; ++j) {
              const int c = c0 + tx * TN + j;
+-            if (GATE_UP) a.h[lr * a.ldo + c] = __half_as_ushort(__float2half_rn(swiglu(ag[i][j], au[i][j], a.limit)));
+-            else a.y[lr * a.ldo + c] = ag[i][j];
++            // K100AI: index in 32 bits.  As a size_t the 64-bit address arithmetic produced a high half of
++            // 0x7fa4 (the pointer's own high half), so the store ran to 0x1F48_C2BF4600 and faulted.
++            // K100AI: unsigned 32-bit, so the compiler must zero-extend instead of taking the pointer's
++            // high half as the offset's (that made the store run to 0x1F48_C2BF4600 and fault)
++            const unsigned uidx = (unsigned) lr * (unsigned) a.ldo + (unsigned) c;
++            if (GATE_UP) a.h[uidx] = __half_as_ushort(__float2half_rn(swiglu(ag[i][j], au[i][j], a.limit)));
++            else a.y[uidx] = ag[i][j];
+         }
+     }
+ }
 --- a/src/dsv41/ds4_iq.cuh
 +++ b/src/dsv41/ds4_iq.cuh
-@@ -76,6 +76,11 @@
+@@ -76,6 +76,12 @@
  /// rows take the token kernels' form (each weight read once, the rows' inputs rounded to int8 per 32 as the token path
  /// rounds them; STRATA_DS4_NO_LIGHT=1: never), the others GEMM tiles (tensor cores on CUDA, F16 operands).
  struct SetArgs {
@@ -587,10 +611,11 @@
 +    // with two members.
 +    int rows_cap = 0, bounds_cap = 0, idx_cap = 0;
 +    int tok_cap = 0;   // K100AI: valid token indices in the row list (0: unchecked)
++    int max_row = 0;   // K100AI: the highest absolute row the bounds may name (0: unchecked)
      const uint8_t* wbase = nullptr;
      size_t stride = 0;
      size_t tr[3] = {0, 0, 0};
-@@ -101,6 +106,10 @@
+@@ -101,6 +107,10 @@
      int total_rows = 0;             // the set's rows in all
  #endif
  };
@@ -771,7 +796,7 @@
          combine(a.plan_w + t * 8, p, a.k, a.cpu_flag[t] ? a.cpu_part + (size_t) t * a.n_embd + r : nullptr,
 --- a/include/strata/dsv41/exl3.hpp
 +++ b/include/strata/dsv41/exl3.hpp
-@@ -145,6 +145,11 @@
+@@ -145,6 +145,12 @@
  /// A set of n_exp routed experts in VRAM, expert e's blob at wbase + e * stride (the layout in lay), owning the sorted
  /// rows [bounds[e], bounds[e + 1]) (device, n_exp + 1 entries); a sorted row's LOCAL row is bounds[e] - row0 + r.
  struct SetArgs {
@@ -780,6 +805,7 @@
 +    // with two members.
 +    int rows_cap = 0, bounds_cap = 0, idx_cap = 0;
 +    int tok_cap = 0;   // K100AI: valid token indices in the row list (0: unchecked)
++    int max_row = 0;   // K100AI: the highest absolute row the bounds may name (0: unchecked)
      const uint8_t* wbase = nullptr;
      size_t stride = 0;
      ExpertLayout lay;

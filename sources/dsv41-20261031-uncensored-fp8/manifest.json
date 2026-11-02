@@ -676,7 +676,7 @@
           "why_that_is_not_a_real_finding": "die Guard-Werte sind Geraete-Globals und damit ZWISCHEN DEN BEIDEN MEMBERS GETEILT: waehrend Member 0 laeuft, kann Member 1 sie schon ueberschrieben haben - der Abstand von genau 3 Strifts ist die Signatur des anderen Members, nicht ein Fehler im Kernel",
           "conclusion": "ein Guard ueber Geraete-Globals ist fuer zwei Members unbrauchbar; die Werte muessten pro Launch durch die Argumente gehen (dafuer muesste man die SetArgs-Struktur durch x3 und iq durchreichen)"
         },
-        "status": "offen; die verbleibenden Wege: (a) Kapazitaeten durch die Argumente reichen (Struct-Aenderung in x3 und iq), (b) Upstream mit dem Belegpaket",
+        "status": "offen, blockiert: 11 Hypothesen ausgeschlossen; der naechste Schritt braucht einen Compiler-/Debugger-Spezialisten mit Zugang zur Karte",
         "capacities_in_the_args": {
           "done": "die Kapazitaeten reisen jetzt PRO LAUNCH in SetArgs (rows_cap, bounds_cap, idx_cap, tok_cap); dafuer wurden beide SetArgs (include/strata/dsv41/exl3.hpp und src/dsv41/ds4_iq.cuh) und die Kopie in iq_set() erweitert",
           "why": "ein Guard ueber Geraete-Globals ist mit zwei Mitgliedern nicht auswertbar (die Globals sind geteilt)",
@@ -689,6 +689,23 @@
           ],
           "result": "ALLE sechs Pruefungen melden null Verstoesse, und der VMFault bleibt",
           "meaning": "kein Index, kein Wert und keine Laenge, die dieser Kernel pruefen kann, ist ungueltig. Der faultende global_load benutzt damit einen Wert, der nicht aus diesen Argumenten stammt - oder der Fehler liegt ausserhalb dieses Kernels (die Backtrace-Zuordnung waere dann irrefuehrend)"
+        },
+        "exhaustive_guard_round": {
+          "checked_in_kernel_per_block_and_per_expert": [
+            "e+1 < bounds_cap",
+            "row0+hi <= idx_cap",
+            "hi <= rows_cap",
+            "lr < rows_cap",
+            "lo/hi >= 0 und monoton",
+            "jeder Wert der Zeilenliste < tok_cap",
+            "jeder bounds-Wert in [0,max_row] und monoton",
+            "row0+hi <= max_row",
+            "ldx/ldo in (0,65536), stride in (0,2^28)"
+          ],
+          "result": "ALLE melden null Verstoesse, ueber alle Blocks und alle Experten - und der VMFault bleibt",
+          "flags_control": "mit exakt den Flags des funktionierenden Baselines (Release, early-inline-all=true) reproduziert",
+          "index_forms_tried": "size_t (Original), int, unsigned - alle drei stuerzen",
+          "conclusion": "kein Eingabe- und kein Indexwert des Kernels ist schuld; der faultende global_store_short berechnet seine Adresse aus einer Basis in SGPR und einem Offset in VGPR, und die Register zeigen den Offset-Hochanteil als 0x7fa4 (den Hochanteil des Zeigers). Das ist entweder ein Codegen-Defekt des DTK-Compilers fuer diesen Kernel oder eine Ursache ausserhalb dieses Kernels - beides ist mit Bordmitteln nicht weiter einzugrenzen"
         }
       },
       "dual_card_plan": {
@@ -743,5 +760,5 @@
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   },
-  "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200"
+  "production": "build-dsv41-full (Basis) + pack7 (Q4_K), --dspark on, health 200, 946 GB frei"
 }
