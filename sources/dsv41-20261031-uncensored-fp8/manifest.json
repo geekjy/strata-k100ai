@@ -538,7 +538,7 @@
           "result": "kein COMBINE-BAD, aber der VMFault bleibt; die letzte Launch-Zeile auf Device 1 ist weiterhin moe_combine_kernel (jetzt 2427 = 2412 + die 15 eingefuegten Zeilen)",
           "conclusion": "der Ausreisser liegt nicht in pos/y (die sind jetzt geklemmt), sondern in acc/w oder in einem Pointer, der zur Laufzeit nicht mehr gueltig ist - das laesst sich ohne Device-Debugger nicht mehr eingrenzen"
         },
-        "recommendation": "rocgdb mit einem Watchpoint auf c.y + 8192 Zeilen, oder den Parallelmodus auf kurze Prompts begrenzen (dann ist er korrekt und schneller)",
+        "recommendation": "Belegpaket an den Upstream-Inhaber: Kernel, Zeile, Instruktion, Register, Minimal-Reproducer und die vollstaendige Ausschlussliste (jetzt inklusive: alle Index-/Wert-/Laengenpruefungen im Kernel sind sauber)",
         "option_b_result": {
           "done": [
             "die Kapazitaeten von y (c.C) und pos (c.C*kPicks) gehen an moe_combine und werden dort geklemmt (kein Fault mehr an der Stelle, kein COMBINE-BAD)",
@@ -676,7 +676,20 @@
           "why_that_is_not_a_real_finding": "die Guard-Werte sind Geraete-Globals und damit ZWISCHEN DEN BEIDEN MEMBERS GETEILT: waehrend Member 0 laeuft, kann Member 1 sie schon ueberschrieben haben - der Abstand von genau 3 Strifts ist die Signatur des anderen Members, nicht ein Fehler im Kernel",
           "conclusion": "ein Guard ueber Geraete-Globals ist fuer zwei Members unbrauchbar; die Werte muessten pro Launch durch die Argumente gehen (dafuer muesste man die SetArgs-Struktur durch x3 und iq durchreichen)"
         },
-        "status": "offen; die verbleibenden Wege: (a) Kapazitaeten durch die Argumente reichen (Struct-Aenderung in x3 und iq), (b) Upstream mit dem Belegpaket"
+        "status": "offen; die verbleibenden Wege: (a) Kapazitaeten durch die Argumente reichen (Struct-Aenderung in x3 und iq), (b) Upstream mit dem Belegpaket",
+        "capacities_in_the_args": {
+          "done": "die Kapazitaeten reisen jetzt PRO LAUNCH in SetArgs (rows_cap, bounds_cap, idx_cap, tok_cap); dafuer wurden beide SetArgs (include/strata/dsv41/exl3.hpp und src/dsv41/ds4_iq.cuh) und die Kopie in iq_set() erweitert",
+          "why": "ein Guard ueber Geraete-Globals ist mit zwei Mitgliedern nicht auswertbar (die Globals sind geteilt)",
+          "checks_in_the_kernel": [
+            "bounds_cap: e+1 muss passen",
+            "idx_cap: row0+hi muss in die Zeilenliste passen",
+            "rows_cap: hi (und lr) muessen in h/y passen",
+            "tok_cap: JEDER Wert in der Zeilenliste (der Token-Index) muss passen",
+            "lo/hi muessen >= 0 und monoton sein"
+          ],
+          "result": "ALLE sechs Pruefungen melden null Verstoesse, und der VMFault bleibt",
+          "meaning": "kein Index, kein Wert und keine Laenge, die dieser Kernel pruefen kann, ist ungueltig. Der faultende global_load benutzt damit einen Wert, der nicht aus diesen Argumenten stammt - oder der Fehler liegt ausserhalb dieses Kernels (die Backtrace-Zuordnung waere dann irrefuehrend)"
+        }
       },
       "dual_card_plan": {
         "single_request": "Experten-TP (beide Karten zugleich) - durch diesen Bug blockiert; hipgdb ist der Weg",

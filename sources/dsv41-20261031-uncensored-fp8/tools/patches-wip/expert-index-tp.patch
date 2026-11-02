@@ -148,12 +148,47 @@
              int max_rows = 0;
              for (int i = i0; i < j; ++i) max_rows = std::max(max_rows, b[i + 1] - b[i]);
              if (nrows > 0) {
-@@ -4290,7 +4341,21 @@
+@@ -4208,6 +4259,32 @@
+                 sa.bounds = d_bounds + i0;
+                 sa.row0 = a;
+                 sa.max_rows = max_rows;
++                if (std::getenv("DS4_PTRCHECK")) {   // K100AI: is every pointer the set kernel will read device memory?
++                    struct { const char* nm; const void* p; } pv[] = {
++                        {"bounds", (const void*) (d_bounds + i0)},
++                        {"idx", (const void*) (c.row_tok + a)},
++                        {"wbase", (const void*) sa.wbase},
++                        {"x16", (const void*) c.x16},
++                        {"h16", (const void*) c.h16},
++                        {"y", (const void*) c.y},
++                        {"pos", (const void*) c.pos},
++                        {"acc", (const void*) c.acc},
++                    };
++                    for (const auto& e : pv) {
++                        hipPointerAttribute_t at{};
++                        const hipError_t pe = hipPointerGetAttributes(&at, e.p);
++                        const bool dev = (pe == cudaSuccess && at.type == hipMemoryTypeDevice);
++                        if (!dev)
++                            std::fprintf(stderr,
++                                         "PTRCHECK: layer %d set [%d,%d) %s = %p is NOT device (err %d type %d)\n",
++                                         l.il, i0, j, e.nm, e.p, (int) pe, pe == cudaSuccess ? (int) at.type : -1);
++                    }
++                }
++                sa.rows_cap = c.C;                    // K100AI: the kernel checks these per launch
++                sa.bounds_cap = 2048 - i0;
++                sa.idx_cap = (int) (c.C * kPicks);
++                sa.tok_cap = c.C;                     // K100AI: a row's token index must be < the chunk's tokens
++                if (std::getenv("DS4_SETDBG")) gg::iq::set_dbg_on(1);
+ #if defined(STRATA_METAL)
+                 sa.hbounds = b + i0;
+                 sa.total_rows = nrows;
+@@ -4290,7 +4367,23 @@
                      std::fwrite(yv.data(), 4, yv.size(), dump_y);
                      std::fflush(dump_y);
                  }
 -                moe_combine(c.acc, c.y, c.pos, c.rw, T, l.k_exp, a, a + nrows, D, d.st);
 +                moe_combine(c.acc, c.y, c.pos, c.rw, T, l.k_exp, a, a + nrows, D, d.st, c.C, c.C * kPicks);
++                if (std::getenv("DS4_SYNC_LAYER")) CK(cudaStreamSynchronize(d.st));   // K100AI: a missing stream
++                // dependency would be hidden by this - if it stops faulting, the bug is an unsynchronised reuse
 +                if (std::getenv("DS4_YGUARD")) {   // K100AI canary check: is the guard behind y dirty?
 +                    static const size_t win = 256 * 1024;   // (the first 51 rows of the guard)
 +                    static std::vector<float> hv(win / 4);
@@ -171,7 +206,7 @@
              }
              i0 = j;
          }
-@@ -4328,9 +4393,15 @@
+@@ -4328,9 +4421,15 @@
                        f32(d, P + "ffn.gate.bias", l.gate_bias, err, acct, (size_t) l.n_exp) &&
                        (l.mtp || img_tok < 0 || pk.get(P + "ffn.gate.bias_vl") == nullptr ||
                         f32(d, P + "ffn.gate.bias_vl", l.gate_bias_vl, err, acct, (size_t) l.n_exp)) &&
@@ -190,7 +225,7 @@
              if (!ok) return false;
              l.sink += (size_t) l.ah0;
              for (int gi = 0; gi < l.ogn; ++gi)
-@@ -4648,6 +4719,20 @@
+@@ -4648,6 +4747,20 @@
                  budget = capped;
                  room = std::max(0.0, room - std::min(budget, all) * nm);
              }
@@ -211,7 +246,7 @@
              double budget_t = budget;   // the drafter's experts first, all of them (every draft uses its blocks)
              for (Layer& l : L)
                  if (l.grp == (int) gi && l.mtp) {
-@@ -4714,6 +4799,22 @@
+@@ -4714,6 +4827,22 @@
                  l.spare_vram = -1;
              }
              for (int i = 0; i < l.n_vram; ++i) l.slot[(size_t) order[(size_t) i]] = i;
@@ -234,7 +269,7 @@
              for (int m = 0; m < l.nm && l.n_slots > 0; ++m) {
                  Layer& x = member(l, m);
                  Dev& d = devs[(size_t) x.dev];
-@@ -4793,9 +4894,18 @@
+@@ -4793,9 +4922,18 @@
              for (int m = 0; m < l.nm; ++m) {
                  Layer& x = member(l, m);
                  std::vector<unsigned long long> tab((size_t) l.n_exp, 0ull);
@@ -255,7 +290,7 @@
                  cudaSetDevice(devs[(size_t) x.dev].id);
                  CK(cudaMemcpy(x.vram_tab, tab.data(), tab.size() * 8, cudaMemcpyHostToDevice));
              }
-@@ -4841,9 +4951,10 @@
+@@ -4841,9 +4979,10 @@
                      bool ok = stage != nullptr && stage2 != nullptr && read_mx(l, e, stage);
                      for (int m = 0; m < l.nm && ok; ++m) {   // (a group: each member its part)
                          const Layer& x = member(l, m);
@@ -268,7 +303,7 @@
                                          unit(l), cudaMemcpyHostToDevice) == cudaSuccess;
                      }
                      if (!ok) {
-@@ -5253,7 +5364,7 @@
+@@ -5253,7 +5392,7 @@
                                  cur_dev = d.id;
                              }
                              if (l.nm > 1) blob_to_half(l, stage, m, stage2);
@@ -277,7 +312,7 @@
                                              unit(x), cudaMemcpyHostToDevice) == cudaSuccess;
                          }
                          if (!up) {
-@@ -8368,17 +8479,23 @@
+@@ -8368,17 +8507,23 @@
              route(c.glog + (size_t) r0 * 1024, l.gate_bias, l.n_exp, l.k_exp, nr, g.route_scale,
                    c.ridx + (size_t) r0 * kPicks, c.rw + (size_t) r0 * kPicks, s, l.gate_bias_vl, vl ? &vb : nullptr);
          }
@@ -307,7 +342,7 @@
          prof_mark(d, 2);
          // the expert stream's copies keep going while the device runs this layer's attention, routing and shared expert:
          // the next items (this layer's likely experts, queued when the layer before routed) go out as they are ready and
-@@ -8515,7 +8632,27 @@
+@@ -8515,7 +8660,27 @@
              for (int m = 0; m < l.nm; ++m) {   // (a group's members: each its own copy)
                  Layer& x = member(l, m);
                  int j = 0;
@@ -336,7 +371,7 @@
              }
          }
      }
-@@ -10051,13 +10188,19 @@
+@@ -10051,13 +10216,19 @@
              const size_t per = (size_t) cols * (ehd + ehd / 32);
              eg_finish(*eg_win[(size_t) l.eg]);   // (asked for when the window began)
              uint8_t* src = h_eg + (size_t) l.eg * eg_cap * per;
@@ -362,7 +397,7 @@
              engram_dequant(d.eg_rows, sc, T * cols, ehd, d.eg_x, s, (int) eg_fmt[(size_t) l.eg]);
              dump_sub(d, "eg_rows", l.il, p0, T, d.eg_rows, (size_t) T * cols * ehd);
              dump_sub(d, "eg_x", l.il, p0, T, d.eg_x, (size_t) T * cols * ehd * 4);
-@@ -10360,9 +10503,12 @@
+@@ -10360,9 +10531,12 @@
              route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
                            d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
                            na[1], l.il);
@@ -378,7 +413,7 @@
              prof_mark(d, 2);
              const x3::ExpertLayout& lay = nm > 1 ? l.hlay : l.lay;
              if (T == 1 && moe_token_path) {
-@@ -10399,8 +10545,11 @@
+@@ -10399,8 +10573,11 @@
                  if (lead) wait_seq(&resps[slot].seq, sq, s);
                  const double m2 = tlog2 ? now_ms() : 0.0;
                  prof_mark(d, 4);
@@ -392,7 +427,7 @@
                  if (tlog2) { t_moe_gu += m1 - m0; t_moe_wait += m2 - m1; t_moe_dn += now_ms() - m2; ++t_moe_n; }
              } else {   // each distinct expert read once for the window's tokens
                  gf::MoeWin mw;
-@@ -10428,7 +10577,9 @@
+@@ -10428,7 +10605,9 @@
                  wa.x_stride = (size_t) D;
                  wa.h = d.xg;
                  wa.part = d.ed;
@@ -403,7 +438,7 @@
                  wa.out = d.moe_out;
                  wa.out_stride = (size_t) D;
                  wa.lay = lay;
-@@ -10442,6 +10593,10 @@
+@@ -10442,6 +10621,10 @@
                      return false;
                  }
              }
@@ -438,9 +473,43 @@
      }
      a.out[(size_t) t * a.out_stride + r] =
          combine(a.plan_w + t * 8, p, a.k,
+@@ -1559,6 +1563,10 @@
+     q.row0 = sa.row0;
+     q.max_rows = sa.max_rows;
+     q.n_exp = sa.n_exp;
++    q.rows_cap = sa.rows_cap;
++    q.bounds_cap = sa.bounds_cap;
++    q.idx_cap = sa.idx_cap;
++    q.tok_cap = sa.tok_cap;
+     q.n_embd = sa.n_embd;
+     q.n_ff = sa.n_ff;
+     q.limit = sa.limit;
 --- a/src/dsv41/ds4_iq.cu
 +++ b/src/dsv41/ds4_iq.cu
-@@ -582,7 +582,8 @@
+@@ -30,6 +30,22 @@
+ #include <unordered_map>
+ 
+ namespace strata::ds4::gguf::iq {
++// K100AI: rows that h/y hold (0: unchecked), and the setter the chunk path calls
++__device__ int g_setRowsCap = 0;
++__device__ int g_setDbg = 0;
++// K100AI range guard: the capacities of the arrays this set may touch, and the blob range it may read
++__device__ int g_boundsCap = 0, g_idxCap = 0;
++__device__ unsigned long long g_blobLo = 0, g_blobHi = 0;
++void set_range_guard(int boundsCap, int idxCap, unsigned long long blobLo, unsigned long long blobHi) {
++    cudaMemcpyToSymbol(g_boundsCap, &boundsCap, sizeof boundsCap, 0, cudaMemcpyHostToDevice);
++    cudaMemcpyToSymbol(g_idxCap, &idxCap, sizeof idxCap, 0, cudaMemcpyHostToDevice);
++    cudaMemcpyToSymbol(g_blobLo, &blobLo, sizeof blobLo, 0, cudaMemcpyHostToDevice);
++    cudaMemcpyToSymbol(g_blobHi, &blobHi, sizeof blobHi, 0, cudaMemcpyHostToDevice);
++}
++__device__ __forceinline__ bool getenv_set_dbg() { return g_setDbg != 0; }
++void set_rows_cap(int cap) { cudaMemcpyToSymbol(g_setRowsCap, &cap, sizeof cap, 0, cudaMemcpyHostToDevice); }
++void set_dbg_on(int on) { cudaMemcpyToSymbol(g_setDbg, &on, sizeof on, 0, cudaMemcpyHostToDevice); }
++
+ namespace {
+ 
+ constexpr int kWarps = 8, kThreads = kWarps * 32;
+@@ -582,7 +598,8 @@
  __device__ __forceinline__ bool group(const Args& a, int grp, const uint8_t*& blob, int& m0, int& m1) {
      if (a.grp_ptr == nullptr) {
          const unsigned long long p = a.plan_ptr[grp];
@@ -450,15 +519,88 @@
          blob = (const uint8_t*) p;
          m0 = grp;
          m1 = grp + 1;
-@@ -739,6 +740,8 @@
+@@ -739,7 +756,33 @@
      __shared__ float xs[RM][33];
      __shared__ int src[RM];
      const int e = blockIdx.z;
 +    // K100AI guard: an expert index past the set must not touch bounds/blob at all
 +    if (e < 0 || e >= a.n_exp) return;
      const int lo = a.bounds[e] - a.row0, hi = a.bounds[e + 1] - a.row0;
++    // K100AI range guard: say WHICH access leaves its buffer, instead of faulting.  The capacities come
++    // with the launch (a device global would be shared by the two members and is therefore useless).
++    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
++        const long long idx_end = (long long) a.row0 + hi;
++        if (a.bounds_cap > 0 && e + 1 >= a.bounds_cap)
++            printf("RANGE bounds: e+1 %d >= %d (row0 %d n_exp %d)\n", e + 1, a.bounds_cap, a.row0, a.n_exp);
++        if (a.idx_cap > 0 && idx_end > a.idx_cap)
++            printf("RANGE idx: needs %lld > %d (row0 %d hi %d)\n", idx_end, a.idx_cap, a.row0, hi);
++        if (lo < 0 || hi < lo)
++            printf("RANGE rows: lo %d hi %d (bounds %d..%d row0 %d)\n", lo, hi, a.bounds[e], a.bounds[e + 1], a.row0);
++        if (a.rows_cap > 0 && hi > a.rows_cap)
++            printf("RANGE capacity: rows %d > %d (row0 %d)\n", hi, a.rows_cap, a.row0);
++
++    }
++    if (g_setRowsCap >= 0 && threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 && blockIdx.y == 0)
++        ;   // (kept for symmetry)
++    if (getenv_set_dbg() && threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0)
++        printf("SETDBG: e %d n_exp %d lo %d hi %d row0 %d max_rows %d ldx %d ldo %d n_ff %d n_embd %d "
++               "h %p xf %p xh %p gu %d | wbase %p stride %zu tr %zu %zu %zu | b %d %d %d %d | idx %d %d %d %d\n",
++               e, a.n_exp, lo, hi, a.row0, a.max_rows, a.ldx, a.ldo, a.n_ff, a.n_embd, (const void*) a.h,
++               (const void*) a.xf, (const void*) a.xh, (int) GATE_UP, (const void*) a.wbase, a.stride, a.tr[0],
++               a.tr[1], a.tr[2], a.bounds ? a.bounds[0] : -1, a.bounds ? a.bounds[1] : -1,
++               a.bounds ? a.bounds[2] : -1, a.bounds ? a.bounds[3] : -1, a.idx ? a.idx[0] : -1,
++               a.idx ? a.idx[1] : -1, a.idx ? a.idx[2] : -1, a.idx ? a.idx[3] : -1);
      const int r0 = lo + blockIdx.x * RM;
      if (r0 >= hi || hi - lo <= a.skip_le) return;   // (uniform; skip_le: the light kernels' experts)
+     if (a.skip_ge > 0 && hi - lo >= a.skip_ge) return;   // (the caller's FP16 GEMMs')
+@@ -773,6 +816,9 @@
+             const int r = i / 32, c = i % 32, sr = src[r];
+             float v = 0.0f;
+             if (sr >= 0) {
++                if (a.tok_cap > 0 && sr >= a.tok_cap && threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
++                    printf("RANGE token: idx has %d (>= %d), row0 %d r %d ldx %d\n", sr, a.tok_cap, a.row0, r0 + r,
++                           a.ldx);
+                 const size_t at = (size_t) sr * a.ldx + (size_t) kb * 32 + c;
+                 v = GATE_UP ? a.xf[at] : __half2float(__ushort_as_half(a.xh[at]));
+             }
+@@ -804,6 +850,12 @@
+         const int r = ty * RT + i;
+         if (r >= nr) continue;
+         const size_t lr = (size_t) (r0 + r);
++        if (a.rows_cap > 0 && (int) lr >= a.rows_cap) {   // K100AI: never write past h/y
++            if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0)
++                printf("SETCAP: lr %zu >= cap %d (e %d, lo %d hi %d row0 %d max_rows %d gateup %d)\n", lr, g_setRowsCap,
++                       e, lo, hi, a.row0, a.max_rows, (int) GATE_UP);
++            continue;
++        }
+ #pragma unroll
+         for (int j = 0; j < TN; ++j) {
+             const int c = c0 + tx * TN + j;
+--- a/src/dsv41/ds4_iq.cuh
++++ b/src/dsv41/ds4_iq.cuh
+@@ -76,6 +76,11 @@
+ /// rows take the token kernels' form (each weight read once, the rows' inputs rounded to int8 per 32 as the token path
+ /// rounds them; STRATA_DS4_NO_LIGHT=1: never), the others GEMM tiles (tensor cores on CUDA, F16 operands).
+ struct SetArgs {
++    // K100AI: the capacities of what this set may touch, so the kernel can report a bad index
++    // instead of faulting (0: unchecked).  They travel per launch, which a device global cannot do
++    // with two members.
++    int rows_cap = 0, bounds_cap = 0, idx_cap = 0;
++    int tok_cap = 0;   // K100AI: valid token indices in the row list (0: unchecked)
+     const uint8_t* wbase = nullptr;
+     size_t stride = 0;
+     size_t tr[3] = {0, 0, 0};
+@@ -101,6 +106,10 @@
+     int total_rows = 0;             // the set's rows in all
+ #endif
+ };
++// K100AI: rows that h/y hold, read by the set kernels (0: unchecked)
++void set_rows_cap(int cap);
++void set_range_guard(int boundsCap, int idxCap, unsigned long long blobLo, unsigned long long blobHi);
++void set_dbg_on(int on);
+ bool set_gate_up(const SetArgs& a, cudaStream_t s);
+ bool set_down(const SetArgs& a, cudaStream_t s);
+ /// Test hooks for the matrix-core (HIP gfx11 / gfx12) prompt tiles: hipk_force(-1 default rules, 0 scalar tiles, 1 matrix-core tiles) and the
 --- a/src/dsv41/ds4_kernels.cu
 +++ b/src/dsv41/ds4_kernels.cu
 @@ -2069,16 +2069,42 @@
@@ -627,3 +769,17 @@
      }
      a.out[(size_t) t * a.out_stride + r] =
          combine(a.plan_w + t * 8, p, a.k, a.cpu_flag[t] ? a.cpu_part + (size_t) t * a.n_embd + r : nullptr,
+--- a/include/strata/dsv41/exl3.hpp
++++ b/include/strata/dsv41/exl3.hpp
+@@ -145,6 +145,11 @@
+ /// A set of n_exp routed experts in VRAM, expert e's blob at wbase + e * stride (the layout in lay), owning the sorted
+ /// rows [bounds[e], bounds[e + 1]) (device, n_exp + 1 entries); a sorted row's LOCAL row is bounds[e] - row0 + r.
+ struct SetArgs {
++    // K100AI: the capacities of what this set may touch, so the kernel can report a bad index
++    // instead of faulting (0: unchecked).  They travel per launch, which a device global cannot do
++    // with two members.
++    int rows_cap = 0, bounds_cap = 0, idx_cap = 0;
++    int tok_cap = 0;   // K100AI: valid token indices in the row list (0: unchecked)
+     const uint8_t* wbase = nullptr;
+     size_t stride = 0;
+     ExpertLayout lay;
