@@ -352,8 +352,9 @@
       },
       "why_no_gain": "der Schicht-Split ist nicht verschwenderisch: jede Karte ist in ihrem Abschnitt zu 100 % ausgelastet. Experten-Index-TP parallelisiert zwar, zahlt aber je Schicht zwei All-Reduces plus CPU-Lane-Verkehr ueber die Karten - das hebt den Gewinn auf. Zusaetzlich sind nur 82 % der Experten resident.",
       "production": {
-        "state": "build-exp --tp 2 --dspark on, DS4_EXPERT_TP=7, health 200, smoke ok",
-        "revert": "bash /4T-02/strata-work/serve_rs2.sh"
+        "state": "build-exp --tp 2 --dspark auto, DS4_EXPERT_TP=7, pack7 (Q4_K)",
+        "revert_pack": "dsv41-serve.json (pack6) + serve_rs2.sh",
+        "revert_parallel": "serve_rs2.sh (Baseline, layer split)"
       },
       "api_failure_fixed": {
         "symptom": "'the engine reported an error: streaming layer 0 expert 1 failed', 0 tokens - bei Prompts ueber 96 Token",
@@ -436,6 +437,18 @@
         "gained": "attention 43.95 -> 43.43 (-0.52 ms)",
         "remaining": "~8.4 ms: engram_dequant + mv(eg_wkv) (echter GEMV ueber eine grosse Gewichtsmatrix) + engram_gate; weitere Gewinne brauchen Kernel-Fusion (dequant in den GEMV) - groesserer Eingriff, vielleicht 2-4 ms",
         "correctness": "Layout ist aequivalent (bei T=1 schreiben beide Varianten dieselben Bytes an dieselben Stellen); smoke: 'The capital of France is Paris.'"
+      },
+      "q4k_dense": {
+        "profiled_per_token": {
+          "pack6_q6k": "GPU 96.26 ms, attention 47.82",
+          "pack7_q4k": "GPU 74.9-80.5 ms, attention 36.9 (-23%)"
+        },
+        "residency": "6281 -> 6367 experts per card (the dense is 1.69 GB smaller)",
+        "load_time": "~150-160 s -> 105 s",
+        "decode_dspark_off": "pack6 19.13 -> pack7 23.9-25.7 tok/s (+25..35%)",
+        "decode_dspark_on": "pack6 32.73 -> pack7 32.92 (median of 3); DSpark itself is worth +28% on pack7 (32.92 vs 25.74 without)",
+        "conclusion": "der Modell-Anteil ist um ~22% gesunken, aber mit DSpark ist die Ende-zu-Ende-Rate jetzt von dessen Drafting/Verify gedeckelt - der naechste Hebel waere DSpark-Tuning, nicht das Modell",
+        "quality": "'The capital of France is Paris.', 17*23 = 391, korrektes Python, 1479-Token-Prompt ohne Fehler"
       }
     }
   },
@@ -474,6 +487,15 @@
       "decode_tok_s": "13.17 (24 tok) / 15.97 (64 tok)",
       "head_measured_ms": "4.4-4.8 (event pair around the head matvec; DS4_HEAD_TIME=1)",
       "notes": "indexer.weights_proj 必须留 F16（引擎 ds4_model.cu:1856）；head wait 是排空整条流的时间，不是 head 内核"
+    },
+    "pack7": {
+      "built": "2026-11-02",
+      "purpose": "BF16 dense -> Q4_K (the hot projection GEMVs are bandwidth-bound; Q6_K -> Q4_K narrows them by 30%)",
+      "source": "DSV41-UNC-v4-iq2.gguf (IQ2_XXS experts + BF16 dense) -> DSV41-UNC-v7-q4k.gguf",
+      "file": "/4T-02/dsv41-conv/DSV41-UNC-v7-q4k.gguf (350.34 GB)",
+      "pack": "/4T-02/dsv41-conv/pack7",
+      "dense_converted": "335 tensors, 13.08 GB -> 3.68 GB (Q6_K had been 5.37 GB)",
+      "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   }
 }
