@@ -1,7 +1,7 @@
 # strata-dsv41 HIP 移植（gfx928 / K100AI）
 
 日期：2026-10-31
-状态：**编译打通 + 专家内核数值门通过；未加载过模型**
+状态：**编译打通 + 专家内核数值门通过 + matrix-core 布局门通过；4K/17-token 提示已在 pack7 上验证（0006 opt-in，KL 有保留）**
 上游：`niko1221/strata` main（引擎 `0.1.55`，取于 2026-10-31，tarball SHA-256 `98fcb991…`）
 ggml：`ggml-org/llama.cpp` `3cf03257f219afbe7334045ff7c6a06ac68c627d`
 
@@ -24,7 +24,8 @@ ggml：`ggml-org/llama.cpp` `3cf03257f219afbe7334045ff7c6a06ac68c627d`
 
 ## 补丁
 
-全部从上游源码树根目录用 `patch -p1` 应用，顺序 0001 → 0005：
+全部从上游源码树根目录用 `patch -p1` 应用，顺序 0001 → 0005（可选的 `0006-mfma-attention.patch` 见下面
+“Matrix-core attention”一节，它不在本目录记录的基线二进制里）：
 
 1. `patches/0001-cmake-gfx928-dsv41.patch`
    - 去掉 `STRATA_BUILD_DSV41 AND NOT STRATA_HIP_GFX906` 的门控（dsv41 在 wave64 后端也构建）；
@@ -91,6 +92,68 @@ docker run --rm --network none --cpus=64 \
 
 （容差：token 路径 1e-5 / 1e-6，set 路径 1e-2 / 3e-3；输出末行为 `ALL OK`。）
 
+## Matrix-core attention（gfx928 用 MMAC，`0006`；布局门/ids 通过，速度和全位置 KL 未过）
+
+`patches/0006-mfma-attention.patch` 是 [`docs/mfma-attention-port.md`](../dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md)
+那篇设计的实现，但**真机验证纠正了设计里的一个前提**：gfx928 没有 MFMA，DTK clang 17 对
+`__builtin_amdgcn_mfma_f32_16x16x16f16` 报 `needs target feature mai-insts`；gfx928 的矩阵核是
+**MMAC**（`__builtin_amdgcn_mmac_f32_16x16x16f16` / `V_MMAC_F32_16X16X16_F16`，布局见
+`/opt/dtk/include/du_mma.hpp`）。所以补丁在 gfx928 上走 MMAC，CDNA 才走 MFMA；两者 A/B 的四半 lane 布局相同，
+只有累加器的行列映射相反（MMAC：行 `lane&15`、列 `(lane>>4)+4i`；MFMA：行 `4*(lane>>4)+i`、列 `lane&15`）。
+其余设计不变：一个 wave 两个 16x16 tile、32 个 key、4 个 wave 各管 128 维；WMMA 的 gfx11/gfx12 路径保持原样；
+gfx9 上 `DS4_FAST_ATTN` 未设置时仍走标量内核。
+
+补丁顺序（2026-11-03 已把两份 engine patch 收进 repo）：
+
+1. **基线**：`patches/0001`→`0005`，或直接用组合版
+   [`../dsv41-20261031-uncensored-fp8/tools/patches-wip/baseline-gfx928-port.patch`](../dsv41-20261031-uncensored-fp8/tools/patches-wip/baseline-gfx928-port.patch)；
+2. **生产树**：再叠
+   [`../dsv41-20261031-uncensored-fp8/tools/patches-wip/expert-index-tp.patch`](../dsv41-20261031-uncensored-fp8/tools/patches-wip/expert-index-tp.patch)
+   （含 `T==1` decode prefetch 等）；
+3. 最后 `0006`。
+
+0006 只改四个文件（新 `src/dsv41/ds4_mfma.cuh`、`ds4_kernels.cu`、新 `tests/dsv41/mfma_layout_test.cpp`、
+`CMakeLists.txt`），并新增 `ds4_mfma_test` 目标（`CMAKE_HIP_ARCHITECTURES` 里有矩阵核架构时才生成）。
+
+**实测（2026-11-03，K100_AI / gfx928）**
+
+| 项目 | 结果 |
+| --- | --- |
+| 布局门 `ds4_mfma_test` | **`matrix-core layout test: ALL OK`**：单步、`mma_scores`、`mma_pv` 三项各 0 mismatch |
+| 4K A/B/A/B（warm-up 不计；pack7，expert-TP，`--window 512`） | 标量 **95,503 / 95,081 ms**（42.72 / 42.91 tok/s）；MMAC **97,291 / 114,571 ms**（41.94 / 35.61 tok/s）。**最好的一次 MMAC 也比标量慢约 2%，一次 114.6 s 的离群值把中位数拉得更差；没有速度收益** |
+| 早先的单次 118,187 ms | 冷启动/缓存未热，不能当 A/B，已作废；据此算出的 +21.7% 不成立 |
+| 生成 ids（16 token） | 两边完全一致：`671,6102,294,8760,344,11111,16,1` |
+| 快速路径确认 | `--window 512` 下 560 次 `ds4: fast attn T=512 heads=32 gen=1` |
+| KL（全 prompt 位置，3601 行） | 平均 **0.0255**、最大 1.595、592 行 >0.006、101 行 argmax 不同；**last-position 0.00131（生成 oracle 通过）**，最后 10 行 argmax 全同 |
+
+**结论要分开看**：布局门和 16-token ids 都过了，但**受控 A/B/A/B 没有预填充速度收益**（最好的一次仍慢约
+2%），而且 KL 的全 prompt 位置平均 0.0255 没过 0.006。设计里“长提示词 +30~45%”的预期在这条 4K/`--window 512`
+上没有出现。因此 `DS4_FAST_ATTN=1` 不仅是 opt-in，**目前也不建议在生产打开**：先定位 592 行的偏差，并在一份
+真正热的 A/B/A/B（10K/32K）上看到正收益，才值得继续。
+
+**验证用的 binary 与 0006 的差别**：A/B/A/B 跑的是 `strata-exp` 树构建的 `build-mfma-exp/strata-dsv41`，即
+baseline + `expert-index-tp.patch` + 0006。它的 `T==1` decode 8-row prefetch（去掉
+`#if !defined(STRATA_USE_HIP)` 的 guard）在 **`expert-index-tp.patch`** 里，不在 0006 里；这条**只影响 decode**，
+4K prefill 的 `T=512` 不经过它，所以不影响上面的预填充对比。0006 按 `apply_order` 叠在 expert-TP 树上即可；
+MMAC 的 device kernel 在验证树和 0006 里逐行一致。
+
+复现：
+
+```bash
+./build-dsv41-gfx928.sh
+bash run-mfma-layout-test.sh     # 必须打印 "matrix-core layout test: ALL OK"
+
+# 4K A/B（服务需先停，否则显存不够；跑完记得 start 回去）
+docker stop -t 60 dsv41-serve
+# 标量：-e DS4_FAST_ATTN=0；MMAC：-e DS4_FAST_ATTN=1；其余见 ops 的启动环境
+#   --pack /4T-02/dsv41-conv/pack7 --ids @ids_4k.txt --window 512 --n 2
+#   --max-context 8192 --gpus 0,1 --tp 2 --dspark none --mmap-experts on
+docker start dsv41-serve
+```
+
+off-box 的记账检查可以单独复现：`python3 mfma-attention-model.py`（需要 numpy，500 个 key、16 个 tile（最后
+一个不满），与注意力参考最大绝对误差 2.7e-4）。它建在 `du_mma.hpp` 的 MMAC map 之上，**不能替代卡上的布局门**。
+
 ## 容器里要看到 K100_AI
 
 只挂 `renderD128` 或不挂宿主机 HyHAL 时，卡会被识别成 `KONGMING`，HIP 报 `no ROCm-capable device`。可用组合：
@@ -100,12 +163,19 @@ docker run --privileged --device /dev/kfd --device /dev/dri \
   -v /usr/local/hyhal:/usr/local/hyhal:ro -v /opt/hyhal:/opt/hyhal:ro ...
 ```
 
-`run-numerics-gate.sh` 用的就是这一组。
+`run-numerics-gate.sh` 和 `run-mfma-layout-test.sh` 用的就是这一组。
 
-## 未验证（不要当成"已跑通"）
+## 仍未验证 / 边界（不要当成"全部跑通"）
 
-- **没有加载过模型**：`strata-dsv41 --pack-info` 需要 pack，本目录不含权重；官方 2.00bpw 包为 138 GB + Engram 111 GB + DSpark 8 GB = 257 GB。
-- **整模型数值未验证**：注意力、路由、超连接、长上下文路径都没跑过；`tools/dsv41/smoke.py`（要求输出 Paris）尚未执行。
+- **本目录不含权重**：真机验证用的是机器上的 `/4T-02/dsv41-conv/pack7`；官方 2.00bpw 包为 138 GB + Engram 111 GB + DSpark 8 GB = 257 GB。
+- **整模型只跑过 4K + 17 token 提示**：`tools/dsv41/smoke.py`（要求输出 Paris）没有重跑；10K/32K、视觉和长上下文仍没在新补丁上验证。
 - **显存/内存分层未在真实专家规模下测过**（64 GiB 显存放不下 288 GB 专家，实际靠 CPU 通道读）。
-- **`DS4_FAST_ATTN=1` 不要开**：那条 WMMA 快速路径在 gfx928 上会走 `__builtin_trap()`（`ds4_wmma.cuh` 只对 gfx11/gfx12 有实现）。默认标量路径不受影响。
+- **`DS4_FAST_ATTN=1` 不建议生产打开**：不打 `0006` 时那条 WMMA 快速路径在 gfx928 上会走 `__builtin_trap()`
+  （`ds4_wmma.cuh` 只对 gfx11/gfx12 有实现）；打了 `0006` 后 gfx928 走 MMAC，布局门和 16-token ids 都过了，
+  但**全 prompt 位置的 KL 平均 0.0255 没过 0.006**（last-position 0.00131 通过），**受控 A/B/A/B 也没有预填充
+  速度收益**（最好的一次仍慢约 2%）。两个问题都解决前不要在生产打开。
+- **MMAC 与 MFMA 不是同一条指令**：gfx928 的矩阵核是 MMAC（DTK clang 17 拒绝 MFMA 并报 `needs target feature mai-insts`）；
+  补丁按 MMAC 实现，CDNA 的分支仍保留 MFMA。
+- **速度没有收益**：4K、`--window 512` 的受控 A/B/A/B 中，标量 95.5/95.1 s，MMAC 97.3/114.6 s；10K/32K 和
+  生产默认 window 未测。
 - **字节级可复现未验证**：`clean_rebuild_verified` 为 `false`；本目录只提供补丁与构建配方，不声明能重编出同一 SHA。

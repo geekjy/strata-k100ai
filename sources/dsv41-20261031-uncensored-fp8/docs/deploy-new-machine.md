@@ -157,7 +157,10 @@ visible (`--gpus 0,1`), `expert-profile.bin` present in the pack, and `--tp 2` a
 
 ## 8. What NOT to carry over blindly
 
-- **do not** enable `DS4_FAST_ATTN` (traps on gfx928, see `docs/mfma-attention-port.md`);
+- **do not** enable `DS4_FAST_ATTN` in production: without `0006-mfma-attention.patch` it traps on gfx928; with the
+  patch gfx928 uses **MMAC** (not MFMA), the layout gate passed and 16-token ids match, but a controlled 4K A/B/A/B
+  showed **no prefill gain** (best MMAC ~2 % slower) and the all-prompt KL mean is 0.0255 (last-position 0.00131)
+  (`docs/mfma-attention-port.md` section 10);
 - the debug probes (`DS4_GEMMDBG`, `DS4_BUFDBG`, `DS4_SET*`, `DS4_RANGE*`, `DS4_PTRCHECK`,
   `DS4_YGUARD`, `DS4_SERIALIZE`) are compiled in but off unless set — leave them off;
 - `build-exp` contains the probes from the crash hunt; they cost nothing when unset, but a clean

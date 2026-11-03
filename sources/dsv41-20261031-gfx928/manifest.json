@@ -68,6 +68,7 @@
       "bytes": 964
     }
   ],
+  "patches_note": "patches/0006-mfma-attention.patch is the opt-in matrix-core port (MMAC on gfx928, MFMA on CDNA); it is not part of the recorded baseline build. It was built and validated on the K100_AI box (layout gate + 16-token ids), but the controlled A/B/A/B showed no prefill speedup and the all-position KL has a caveat: see mfma_attention below.",
   "files": [
     {
       "path": "CMakeLists.txt",
@@ -142,11 +143,111 @@
     "模型加载与整模型推理（本目录不含权重，官方 2.00bpw 需 138 GB + Engram 111 GB + DSpark 8 GB）",
     "注意力 / 路由 / 超连接 / 长上下文的整模型数值（ds4_iq_test 只覆盖 i-quant 专家内核）",
     "真实专家规模下的显存与内存分层",
+    "10K/32K 提示词的 A/B（4K 受控 A/B/A/B 已做，无速度收益）",
+    "全 prompt 位置的 KL 0.006 门槛（last-position 0.00131 通过，全位置平均 0.0255 不通过）",
     "字节级可复现（clean_rebuild_verified 为 false）"
   ],
   "known_traps": [
-    "DS4_FAST_ATTN=1 的 WMMA 快速路径在 gfx928 上走 __builtin_trap()（ds4_wmma.cuh 只实现 gfx11/gfx12），不要开启",
+    "gfx928 没有 MFMA：DTK 26.04 / clang 17 对 __builtin_amdgcn_mfma_f32_16x16x16f16 报 \"needs target feature mai-insts\"；gfx928 的矩阵核是 MMAC（__builtin_amdgcn_mmac_f32_16x16x16f16，V_MMAC_F32_16X16X16_F16）。0006 补丁在 gfx928 上按 MMAC 实现，CDNA 才走 MFMA",
+    "DS4_FAST_ATTN=1 的布局门和 16-token ids 已过，但**受控 A/B/A/B 没有预填充速度收益**（最好的一次仍慢约 2%），且 KL 门槛有保留：全 prompt 位置平均 0.0255，last-position 0.00131；默认不开启，也不建议生产启用",
     "只挂 renderD128 或未挂宿主机 HyHAL 时卡被识别为 KONGMING，HIP 报 no ROCm-capable device"
   ],
+  "mfma_attention": {
+    "patch": "patches/0006-mfma-attention.patch",
+    "sha256": "8cdd50b4e845c74ba9d6da29f34ad5435fb640dc4154f95bcd38580bae779ae3",
+    "bytes": 35890,
+    "status": "implemented and validated on K100_AI (gfx928, MMAC): layout gate ALL OK, 16-token ids identical; controlled A/B/A/B shows no prefill speedup (best MMAC about 2% slower) and all-prompt-position KL is not under the 0.006 bar",
+    "design": "../dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md",
+    "apply_order": "after the baseline (patches/0001..0005 or tools/patches-wip/baseline-gfx928-port.patch); on the production tree also after tools/patches-wip/expert-index-tp.patch, then this patch",
+    "what": "gfx928's matrix core is MMAC, not MFMA: sparse_attn_wmma_kernel uses __builtin_amdgcn_mmac_f32_16x16x16f16 (C row = lane&15, col = (lane>>4)+4i); the CDNA parts keep MFMA. Two 16x16 tiles a wave, 32 keys a tile, 4 waves x 128 dims; gfx11/gfx12 WMMA unchanged; DS4_FAST_ATTN stays opt-in on gfx9",
+    "files_after_patch": [
+      {
+        "path": "src/dsv41/ds4_mfma.cuh",
+        "sha256": "d60adb1d1229d738f25673b2f94a63544fc7130f207e1ac3f9d4948ea4f48c83",
+        "bytes": 5648,
+        "change": "new (MMAC on gfx928, MFMA on CDNA)"
+      },
+      {
+        "path": "src/dsv41/ds4_kernels.cu",
+        "sha256": "4239813b83cc7145adbf68795021701726f4314423c4f0adbe7f494a0ae74aaa",
+        "bytes": 137105,
+        "change": "modified (from the v0.2.9 + baseline tree)"
+      },
+      {
+        "path": "tests/dsv41/mfma_layout_test.cpp",
+        "sha256": "8e9903d49f254e98d58a63a3caca57aed7c1c24b5fab97404d76f86ecb2bb133",
+        "bytes": 13851,
+        "change": "new"
+      },
+      {
+        "path": "CMakeLists.txt",
+        "sha256": "e48158c6c41ed588c317078dc1f07054aa7c09f698a01760b793b5f2925565d8",
+        "bytes": 200979,
+        "change": "modified (adds the ds4_mfma_test target on a matrix-core architecture)"
+      }
+    ],
+    "layout_test": {
+      "target": "ds4_mfma_test",
+      "source": "tests/dsv41/mfma_layout_test.cpp",
+      "run": "run-mfma-layout-test.sh",
+      "checks": ["one V_MMAC/V_MFMA 16x16x16 step on the device's map", "mma_scores over 32 keys and 4 waves", "mma_pv over 32 keys and 4 waves"],
+      "pass_text": "matrix-core layout test: ALL OK",
+      "skip_return_code": 77
+    },
+    "cpu_model": {
+      "path": "mfma-attention-model.py",
+      "sha256": "1746a924b0068a65a061a51a438bc550a4e49531c33eb3b4fcb2899fb6051bb3",
+      "bytes": 6021,
+      "what": "the MMAC branch's bookkeeping (C row=lane&15, col=(lane>>4)+4i; 4 waves, 32-key stage, 16 tiles with a partial last, online softmax, both products) against a plain attention reference",
+      "result": "max abs 2.7e-4, mean 2.6e-5 on 500 keys (16 tiles, last partial)"
+    },
+    "validated_on_box": {
+      "date": "2026-11-03",
+      "device": "gfx928:sramecc+:xnack- (K100_AI)",
+      "dtk": "26.04 / clang 17.0.0",
+      "not_in_patch": "the validated binary came from strata-exp = baseline + expert-index-tp + 0006. Its earlier K100AI T==1 decode 8-row prefetch is part of expert-index-tp.patch, not 0006; it is decode-only, does not run on the T=512 prefill slab, and the MMAC device kernel is line-identical between the validated tree and 0006.",
+      "instruction_discovery": "the DTK clang rejects __builtin_amdgcn_mfma_f32_16x16x16f16 on gfx928 ('needs target feature mai-insts'); gfx928 has __builtin_amdgcn_mmac_f32_16x16x16f16 and V_MMAC_F32_16X16X16_F16 (/opt/dtk/include/du_mma.hpp gives the lane map). A raw one-step probe matched the CPU product with 0 mismatches; random-value precision was 1.75e-7 (one step) / 2.05e-6 (16 steps) max absolute vs FP64.",
+      "layout_test": "matrix-core layout test: ALL OK (one step + mma_scores + mma_pv, 0 mismatches each)",
+      "prefill_ab": {
+        "prompt_tokens": 4080,
+        "window": 512,
+        "pack": "pack7",
+        "env": "DS4_EXPERT_TP=1 DS4_AR_RS2=1 DS4_ATTN_SPLIT=1, --tp 2 --dspark none --mmap-experts on, same binary",
+        "order": "warm-up then scalar, MMAC, scalar, MMAC (A/B/A/B)",
+        "warmup_scalar_ms": 103318,
+        "scalar_ms": [95503, 95081],
+        "scalar_tok_s": [42.72, 42.91],
+        "mmac_ms": [97291, 114571],
+        "mmac_tok_s": [41.94, 35.61],
+        "result": "no speedup: the best MMAC run (97.3 s) is about 2% slower than the scalar runs (95.1-95.5 s); one MMAC outlier (114.6 s) makes the median worse",
+        "note": "the earlier single 118187 -> 97096 ms pair was a cold first run and is retracted; it is not an A/B"
+      },
+      "ids": "4k prompt, 16 greedy tokens: 671,6102,294,8760,344,11111,16,1 identical for scalar and MMAC; the 17-token prompt gives 671,6102,294,8760 (the short run uses the window path, not the fast path)",
+      "fast_path_log": "with --window 512, 560 launches logged 'ds4: fast attn T=512 heads=32 gen=1'",
+      "kl": {
+        "rows": 3601,
+        "mean": 0.0255,
+        "max": 1.595,
+        "rows_over_0.006": 592,
+        "argmax_mismatches": 101,
+        "last_row": 0.00131,
+        "last_10_argmax": "all match",
+        "note": "the last-position logits (the generation oracle) are under 0.006; the mean over every prompt position is not. Most positions are bit-identical (median KL 7.7e-7); a subset (592) diverges, so this is not plain FP16 rounding."
+      },
+      "service": "dsv41-serve was stopped for the CLI runs and restarted afterwards; /health returned 200"
+    },
+    "checks_off_box": [
+      "host syntax check with clang 23 against a stub HIP header and the MMAC/MFMA builtin",
+      "CPU model of the MMAC branch vs a plain attention reference: 500 keys, 16 tiles, last partial; max abs 2.7e-4",
+      "the patch applies cleanly to a fresh v0.2.9 + baseline-gfx928-port tree and reproduces the four hashes above"
+    ],
+    "not_verified": [
+      "10K/32K prompts and the production default window (the 4K controlled A/B/A/B showed no gain; larger prompts were not run)",
+      "10K/32K prompts and the production default window (the 4k test used --window 512 to force the chunked path)",
+      "all-prompt-position KL under 0.006: the mean is 0.0255; only the last-position/generation logits pass (0.00131)",
+      "a full tensor comparison of DS4_FAST_ATTN unset vs 0 on the production tree (ids match; tensors were not compared)",
+      "byte-level reproducibility"
+    ]
+  },
   "clean_rebuild_verified": false
 }

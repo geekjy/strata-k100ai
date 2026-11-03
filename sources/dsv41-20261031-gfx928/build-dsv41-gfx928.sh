@@ -43,5 +43,16 @@ cmake -S "$STRATA_SRC" -B "$BUILD" -G Ninja \
 
 cmake --build "$BUILD" -j "$JOBS" --target strata-dsv41 ds4_iq_test -- -k 0
 
+# the matrix-core layout gate (patches/0006-mfma-attention.patch) exists only when that patch is applied, and the test
+# target is generated only for the matrix-core parts (gfx928 = MMAC, the CDNA parts = MFMA; CMakeLists.txt's list)
+MCORE_ARCH=0
+for _a in ${ARCH//;/ }; do
+  case "${_a%%:*}" in gfx928|gfx908|gfx90a|gfx940|gfx941|gfx942|gfx950) MCORE_ARCH=1 ;; esac
+done
+if [[ -f "$STRATA_SRC/src/dsv41/ds4_mfma.cuh" && "$MCORE_ARCH" == 1 && "$NATIVE_EXPERTS" != "OFF" ]]; then
+  cmake --build "$BUILD" -j "$JOBS" --target ds4_mfma_test -- -k 0
+fi
+
 sha256sum "$BUILD/strata-dsv41" "$BUILD/ds4_iq_test"
+if [[ -x "$BUILD/ds4_mfma_test" ]]; then sha256sum "$BUILD/ds4_mfma_test"; fi
 echo "built: $BUILD/strata-dsv41"

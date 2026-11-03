@@ -1,4 +1,4 @@
-﻿# DeepSeek-V4.1-Flash 与 GLM-5.3-Flash 在 K100AI 上的现状
+# DeepSeek-V4.1-Flash 与 GLM-5.3-Flash 在 K100AI 上的现状
 
 日期：2026-10-31
 机器：单卡 / 双卡海光 K100_AI（gfx928、wave64），DTK 26.04 / clang 17
@@ -69,9 +69,9 @@ docker run --privileged --device /dev/kfd --device /dev/dri \
 3. **整模型数值**：`tools/dsv41/smoke.py`（要求输出 Paris），再谈长上下文。
 4. **分层与性能**：64 GiB 显存放不下 288 GB 专家，实际靠 CPU 通道读；先 `--experts 5`（Faster）压显存再谈别的。
 
-**当前明确没验证**：模型加载、注意力/路由/超连接的整模型数值、真实专家规模下的显存与内存分层、字节级可复现（`clean_rebuild_verified` 为 `false`）。
+**当前边界**：本仓库不含权重；真机验证已在 pack7 上跑过 17-token 和 4K 提示（见下面的 matrix-core 条目），但 10K/32K、视觉 + 专家-TP、真实专家规模下的显存分层、全 prompt KL 门槛和字节级复现仍未完成。
 
-**一个坑**：`DS4_FAST_ATTN=1` 的 WMMA 快速路径在 gfx928 上会 `__builtin_trap()`（`ds4_wmma.cuh` 只实现 gfx11/gfx12），不要开；默认标量路径不受影响。
+**一个坑 + 真机修正**：`DS4_FAST_ATTN=1` 在未打 `0006` 时走 WMMA 快速路径，gfx928 上会 `__builtin_trap()`（`ds4_wmma.cuh` 只实现 gfx11/gfx12），默认标量路径不受影响。2026-11-03 已在 K100_AI 上验证：gfx928 **没有 MFMA**（DTK clang 17 报 `needs target feature mai-insts`），矩阵核是 **MMAC**；补丁在 gfx928 走 MMAC、CDNA 走 MFMA。布局门 `matrix-core layout test: ALL OK`，4K 生成 16 个 token 两边完全一致；但**受控 A/B/A/B 没有预填充速度收益**（标量 95.5/95.1 s，MMAC 97.3/114.6 s，最好也慢约 2%），全 prompt 位置 KL 平均 0.0255 仍有保留（last-position 0.00131 通过）。所以生产**不要默认打开**：速度和全位置 KL 两个问题都还没解决。
 
 ## GLM-5.3-Flash
 
@@ -99,5 +99,6 @@ docker run --privileged --device /dev/kfd --device /dev/dri \
 
 - [operations.md](../sources/dsv41-20261031-uncensored-fp8/docs/operations.md)：生产运维手册（启停、回退、监控、开关清单、已付代价的故障模式）。
 - [deploy-new-machine.md](../sources/dsv41-20261031-uncensored-fp8/docs/deploy-new-machine.md)：在第二台机器上部署与编译（镜像/模型/源码的搬运清单与验收标准）。
-- [mfma-attention-port.md](../sources/dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md)：把矩阵核心注意力移植到 gfx928（MFMA）的设计，预计预填充 +30~45%。
+- [mfma-attention-port.md](../sources/dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md)：把矩阵核心注意力移植到 gfx928 的设计与实现记录；真机确认 gfx928 是 **MMAC** 不是 MFMA；布局门/16-token ids 通过，但受控 A/B/A/B 无速度收益、全 prompt KL 有保留。
+- [0006-mfma-attention.patch](../sources/dsv41-20261031-gfx928/patches/0006-mfma-attention.patch)：上述实现补丁与 `ds4_mfma_test` 布局门（已在卡上 ALL OK）；在 KL 偏差确定前，`DS4_FAST_ATTN` 仍保持 opt-in。
 - [sources/dsv41-20261031-uncensored-fp8/ops/](../sources/dsv41-20261031-uncensored-fp8/ops/)：生产启动脚本、serve 配置与测试用 ids。

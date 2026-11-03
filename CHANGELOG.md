@@ -1,4 +1,29 @@
-﻿# 更新记录
+# 更新记录
+
+## 2026-11-03 矩阵核心注意力移植：gfx928 用 MMAC（布局门/ids 通过；速度无收益、KL 有保留；main，未打新标签）
+
+- 按 [mfma-attention-port.md](sources/dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md) 的设计实现
+  [patches/0006-mfma-attention.patch](sources/dsv41-20261031-gfx928/patches/0006-mfma-attention.patch)，但真机纠正了前提：
+  **gfx928 没有 MFMA**（DTK clang 17 报 `needs target feature mai-insts`），它的矩阵核是 **MMAC**
+  （`__builtin_amdgcn_mmac_f32_16x16x16f16` / `V_MMAC_F32_16X16X16_F16`，布局见 `/opt/dtk/include/du_mma.hpp`）。
+  补丁在 gfx928 上走 MMAC，CDNA 保留 MFMA；一个 wave 覆盖两个 16x16 tile（32 个 key、8 个累加浮点 = `f8v`），
+  4 个 wave 各管 128 维；gfx11/gfx12 的 WMMA 路径逐字未动。
+- 新 `src/dsv41/ds4_mfma.cuh`（A/B 四半 gather、`mma_scores`、`mma_pv`、`mma_acc_row/col`；MMAC 的 C 行 `lane&15`、
+  列 `(lane>>4)+4i`，MFMA 的反之）、新 `tests/dsv41/mfma_layout_test.cpp`（`ds4_mfma_test` 布局门，非矩阵核设备返回 77）、
+  `CMakeLists.txt` 目标、`ds4_kernels.cu` 的分支与 `device_is_gfx9()`。默认仍走标量内核，只有 `DS4_FAST_ATTN=1` 才启用。
+- **真机结果（2026-11-03，K100_AI / gfx928，pack7 + expert-TP）**：布局门
+  `matrix-core layout test: ALL OK`（单步、`mma_scores`、`mma_pv` 各 0 mismatch）；4K 生成 16 个 token 两边完全一致
+  `671,6102,294,8760,344,11111,16,1`。
+- **速度是负结果**：4K、`--window 512` 的受控 A/B/A/B（先 warm-up，不计）标量 **95,503 / 95,081 ms**
+  （42.72 / 42.91 tok/s），MMAC **97,291 / 114,571 ms**（41.94 / 35.61 tok/s）；最好的一次 MMAC 仍慢约 2%，
+  没有预填充收益。早先单次 118,187 → 97,096 ms 的“+21.7%”是冷启动首跑，已作废；带 dump 的 100,886 → 89,082
+  也不是受控 A/B。设计里 +30~45% 的长提示预期在这条 4K 上没有重现。
+- **KL 也有保留**：全 3601 个 prompt 位置平均 **0.0255**、最大 1.595、592 行 >0.006、101 行 argmax 不同；但**最后一个位置
+  （生成 oracle）KL 0.00131 < 0.006**，最后 10 行 argmax 全同。多数位置逐位相同（中位 KL 7.7e-7），偏差集中在部分行，
+  不像单纯 FP16 舍入。**结论：布局门和 16-token ids 过了，但速度不增、全位置 KL 未过；`DS4_FAST_ATTN=1` 不建议生产启用。**
+- 验证期间停了 `dsv41-serve` 以腾出两张卡，跑完已 `docker start` 并确认 `/health` 200。
+- **未做**：10K/32K 提示、生产默认 window 下的触发、全 prompt 位置 KL 达标、unset vs 0 的全张量回归、
+  字节级复现。
 
 ## 2026-11-03 专家序号张量并行：修好长提示词崩溃并上生产（main，未打新标签）
 
@@ -8,7 +33,7 @@
 - **实测**：2210 token 116 tok/s、4080 token 170 tok/s、**10200 token 183 tok/s**（基线 134），解码约 22.5（DSpark 关）/ 24–27（开）；API 侧 12 个混合请求（638–9999 token）全部成功，引擎零重启。
 - **生产已切换**：serve_pack7_tp.sh + dsv41-serve-p7tp.json（DS4_EXPERT_TP=1 DS4_AR_RS2=1 DS4_ATTN_SPLIT=1，pack7 + DSpark，--restart unless-stopped）；回退仍是 serve_pack7.sh。
 - **性能**：DS4_ATTN_SPLIT=1 在 A/B 对比里让解码 23.39 → 25.21 tok/s（+7.8%），attention 50.78 → 43.34 ms。实测并否决：--prefill-chunk 8192（预填充更慢）、DS4_FAT_ROWS=64（无收益）、缩小 max-context（KV 太小，显存专家只从 5803 变 5809）。All-reduce 也不是瓶颈（每 token 仅 3.17 ms）。
-- **DS4_FAST_ATTN 在 gfx928 上会崩**：ds4_wmma.cuh 只有 gfx11/gfx12 分支，其余走 __builtin_trap()，看起来像 VMFault。移植 MFMA 的设计写在 docs/mfma-attention-port.md（预计预填充 +30~45%，3–5 个工作日）。
+- **DS4_FAST_ATTN 在 gfx928 上会崩（未打 0006 时）**：ds4_wmma.cuh 只有 gfx11/gfx12 分支，其余走 __builtin_trap()，看起来像 VMFault。移植设计写在 docs/mfma-attention-port.md；**同日实现并真机验证**：gfx928 实际是 MMAC 不是 MFMA，布局门 ALL OK、16-token ids 一致；但受控 A/B/A/B **没有预填充速度收益**，全 prompt KL 平均 0.0255 仍有保留，**不建议生产启用**。见本页最上面的条目。
 - **新增文档**：[operations.md](sources/dsv41-20261031-uncensored-fp8/docs/operations.md)（运维手册）、[deploy-new-machine.md](sources/dsv41-20261031-uncensored-fp8/docs/deploy-new-machine.md)（第二台机器部署）、[mfma-attention-port.md](sources/dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md)（优化设计），以及 sources/dsv41-20261031-uncensored-fp8/ops/（生产脚本与测试用 ids）。
 - **边界**：>10k token 未验证；视觉 + 专家-TP 未测；解码 24–27 tok/s 与预填充 138–183 tok/s 是当前架构（2 卡 + 每层跨卡同步）的实际上限。
 ## 2026-10-31 FP8 权重转 GGUF 并打包：装载成功，首次前向在 gfx928 上越界（main，未打新标签）
@@ -30,7 +55,7 @@
 - 实测（容器 `dcu-qwen3-5:perfect-0.0.1`，DTK 26.04 / clang 17 / cmake 3.29，64 并发）：首轮 9 个文件 / **50 个错误**，终轮 **0 错误**；`NATIVE_EXPERTS=ON` 完整构建约 761 s，产出 `strata-dsv41` **23,413,800 B**（SHA-256 `6cc34877…`），`source /opt/dtk/env.sh` 后 `--version` 正常输出 `0.1.55`。
 - 数值门：上游的 H2 门 `ds4_iq_test`（设备 i-quant 专家内核 vs ggml 自身解码 + 双精度参考，不需要权重）在真卡 K100_AI 上 **`ALL OK`**，覆盖 IQ2_XS / IQ2_S / IQ3_XXS / IQ3_S / IQ4_XS / IQ1_M，设备路径与 CPU 通道同容差全过（token gate_up 最差 4.63e-08 / 容差 1e-5）。dsv41 的内核按 wave32 写，"wave64 上会不会静默算错"这一项由此被实测排除。
 - 记录一条运行环境要求：容器只挂 `renderD128` 或未挂宿主机 HyHAL 时卡被识别成 `KONGMING`、HIP 报 `no ROCm-capable device`；需要 `--privileged --device /dev/kfd --device /dev/dri` 加 `/usr/local/hyhal`、`/opt/hyhal` 只读挂载。
-- 边界（不声称已跑通）：未下载权重（官方 2.00bpw 需 138 GB + Engram 111 GB + DSpark 8 GB），未加载过模型，注意力/路由/超连接的整模型数值、真实专家规模下的显存分层、字节级可复现（`clean_rebuild_verified` 仍为 `false`）均未验证；`DS4_FAST_ATTN=1` 在 gfx928 上会 `__builtin_trap()`，不要开启。
+- 边界（不声称已跑通）：未下载权重（官方 2.00bpw 需 138 GB + Engram 111 GB + DSpark 8 GB），本轮之前未加载过模型；注意力/路由/超连接的整模型数值、真实专家规模下的显存分层、字节级可复现（`clean_rebuild_verified` 仍为 `false`）均未验证。`DS4_FAST_ATTN=1` 在 gfx928 上已于 2026-11-03 用 MMAC 跑通布局门和 16-token ids，但受控 A/B/A/B **没有速度收益**、全 prompt KL 有保留，默认仍关闭；见本页最上面的条目。
 - 新增文档 [docs/DEEPSEEK_V41_K100AI.md](docs/DEEPSEEK_V41_K100AI.md)：包含上述实测数据、容器配方与后续步骤；同时记录 **GLM-5.3-Flash 目前没有任何引擎支持**的结论（`Glm5Next` 架构、两个 vLLM 镜像与 strata 均不认，需新写模型族），以及它与 DeepSeek V4.1 在稀疏注意力/超连接上的同源性。
 
 ## v0.2.1

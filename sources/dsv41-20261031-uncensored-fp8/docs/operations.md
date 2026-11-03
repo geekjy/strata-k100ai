@@ -108,11 +108,11 @@ decode: 64 tokens in 2357 ms (26.73 tok/s); CPU lane: 1436 of 19320 experts
 | `--dspark on` | the speculative drafter; worth ~+28 % decode in earlier measurements |
 | `--mmap-experts on` | read the CPU-lane experts in place (do not copy them into RAM) |
 
-### 5.2 Must never be enabled here
+### 5.2 Not enabled here
 
 | switch | why |
 |---|---|
-| `DS4_FAST_ATTN=1` | selects the WMMA attention kernel; `ds4_wmma.cuh` has no gfx9 branch and executes `__builtin_trap()`. It looks like a VMFault. See `docs/mfma-attention-port.md`. |
+| `DS4_FAST_ATTN=1` | opt-in matrix-core attention. Without `patches/0006-mfma-attention.patch` it selects the WMMA kernel; `ds4_wmma.cuh` has no gfx9 branch and executes `__builtin_trap()` (it looks like a VMFault). With 0006 on gfx928 it uses **MMAC** (not MFMA), and it has been built and run on the card: `matrix-core layout test: ALL OK`, 16-token ids identical. **Do not enable it in production**: a controlled 4K A/B/A/B showed **no prefill gain** (best MMAC ~2 % slower), and the all-prompt-position KL mean is 0.0255 (last-position 0.00131). See `docs/mfma-attention-port.md` section 10. |
 
 ### 5.3 Measured and rejected (do not re-litigate without new data)
 
@@ -212,5 +212,7 @@ The quantisation was ruled out as a crash cause by running pack4 and pack7 side 
 - vision + expert-TP is untested;
 - the parallel build has been exercised up to 10k-token prompts (12 mixed API requests, 0 failures);
   beyond that nothing has been validated;
-- the MFMA attention port (the largest remaining prefill lever) is designed but not started:
-  `docs/mfma-attention-port.md`.
+- the matrix-core attention port is **implemented and validated on the box**: `sources/dsv41-20261031-gfx928/patches/0006-mfma-attention.patch`
+  uses MMAC on gfx928 (DTK has no MFMA there), the layout gate is ALL OK and 16-token ids match. It is **not a win**:
+  a controlled 4K A/B/A/B showed no prefill gain (best MMAC ~2 % slower), and the all-prompt KL mean is 0.0255
+  (last-position 0.00131). Keep it off; 10K/32K is still unmeasured: `docs/mfma-attention-port.md` section 10.
