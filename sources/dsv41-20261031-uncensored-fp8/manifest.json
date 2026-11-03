@@ -846,5 +846,9 @@
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   },
-  "production": "unveraendert: Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200"
+  "production": "unveraendert: Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200",
+  "docs": {
+    "operations": "docs/operations.md - Betriebshandbuch: Hardware, Deployment, Start/Stop/Rollback, Health, Baseline-Zahlen, Schalter (was laeuft, was nie, was gemessen und verworfen), die bereits bezahlten Fehlermodi, Rebuild-Anleitung, Packs, offene Punkte",
+    "mfma_attention": "docs/mfma-attention-port.md - Entwurf fuer die MFMA-Attention auf gfx928"
+  }
 }
