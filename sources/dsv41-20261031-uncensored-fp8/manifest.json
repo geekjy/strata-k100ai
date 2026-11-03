@@ -771,6 +771,21 @@
         "attention_split": "DS4_ATTN_SPLIT=1 (der Split-KV-Kernel des Projekts, fuer eine Query gebaut): im A/B-Vergleich 23.39 -> 25.21 tok/s (+7.8%) und attention 50.78 -> 43.34 ms; in Produktion aktiviert, drei Messungen 23.1 / 23.6 / 29.8 tok/s (Median 23.6)",
         "fast_attn_is_broken": "DS4_FAST_ATTN=1 fuehrt zu einem VMFault - dieser Schalter darf NICHT an sein",
         "attention_and_head_are_already_split": "NHL = g.heads / head_members(nm) und d.logits_part pro Mitglied: die Aufteilung von attention und Ausgabe-Kopf macht die Engine bereits von sich aus"
+      },
+      "tuning_sweep": {
+        "fast_attn": {
+          "what": "DS4_FAST_ATTN waehlt sparse_attn_wmma_kernel (Matrix-Core-Attention fuer den gepackten KV)",
+          "why_it_crashes": "der Quellkommentar sagt es selbst: nur gfx12 (R9700) ist validiert, gfx11/gfx1151 sind ungetestet, und DS4_FAST_ATTN=1 schaltet es anderswo ein - gfx928 gehoert dazu",
+          "verdict": "muss AUS bleiben (VMFault)"
+        },
+        "measured_on_a_4080_token_prompt_DSpark_on": {
+          "control": "prefill 138.23 tok/s, decode 26.73 tok/s",
+          "DS4_FAT_ROWS=64": "prefill 136.36, decode 25.52 - kein Gewinn",
+          "STRATA_DS4_A_MB=32": "kein Ergebnis (Lauf ohne Ausgabe)",
+          "--prefill-chunk 8192": "prefill 109.44 (schlechter), decode 28.29 - im Rauschen",
+          "DS4_ATTN_SPLIT=1": "prefill unveraendert, decode 23.39 -> 25.21 im A/B (+7.8%), attention 50.78 -> 43.34 ms - der einzige echte Gewinn, ist in Produktion"
+        },
+        "caveat": "Einzelmessungen schwanken um +/-20% (mehrfach belegt); Effekte unter ~10% sind nur mit A/B/A/B und Median nachweisbar"
       }
     }
   },
