@@ -25,7 +25,8 @@
 - **干净 v029 一键复现**：新增 `sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh`，补上之前缺失的
   `tools/patches-wip/probes-base.patch`（expert 依赖的本地 probe 基树）。在机器上验证：从 clean v0.2.9
   （c62d5e3a）应用 baseline → 0002/0003/0004 → probes-base → expert → 0006 后，生成树与实测的 `build-all`
-  **完全一致**（`diff -qr` 0），六个关键 SHA 校验通过；`--build` 可直接构建。
+  **完全一致**（`diff -qr` 0），六个关键 SHA 校验通过；`--build` 也从 clean v029 构建成功，
+  `ds4_mfma_test` 打印 `matrix-core layout test: ALL OK`。
 - **KL 也有保留**：全 3601 个 prompt 位置平均 **0.0255**、最大 1.595、592 行 >0.006、101 行 argmax 不同；但**最后一个位置
   （生成 oracle）KL 0.00131 < 0.006**，最后 10 行 argmax 全同。多数位置逐位相同（中位 KL 7.7e-7），偏差集中在部分行，
   不像单纯 FP16 舍入。**结论：布局门和 16-token ids 过了，但 4K 不增、10K 仅 +2.8%、全位置 KL 未过；

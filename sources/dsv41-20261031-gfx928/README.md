@@ -123,8 +123,8 @@ sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh /path/to/v029.tar.gz --bui
 ```
 
 脚本按上面顺序应用并校验六个关键 SHA。已在机器上验证：生成树与实测的 `build-all` **完全一致**
-（`diff -qr` 0）。`probes-base.patch` 就是之前缺的本地 probe 基树——`expert-index-tp.patch` 依赖它，
-补上后干净 v029 不再有 reject。
+（`diff -qr` 0），`--build` 也从 clean v029 构建成功、`ds4_mfma_test` 打印 `matrix-core layout test: ALL OK`。
+`probes-base.patch` 就是之前缺的本地 probe 基树——`expert-index-tp.patch` 依赖它，补上后干净 v029 不再有 reject。
 
 0006 只改四个文件（新 `src/dsv41/ds4_mfma.cuh`、`ds4_kernels.cu`、新 `tests/dsv41/mfma_layout_test.cpp`、
 `CMakeLists.txt`），并新增 `ds4_mfma_test` 目标（`CMAKE_HIP_ARCHITECTURES` 里有矩阵核架构时才生成）。

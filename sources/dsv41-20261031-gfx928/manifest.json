@@ -211,7 +211,7 @@
         "bytes": 19081,
         "note": "the local probe base ds4_model.cu/ds4_kernels.cu/ds4_kernels.cuh that expert-index-tp.patch expects; without it the clean chain rejects one ds4_model.cu hunk"
       },
-      "verified": "on the box: the produced tree is byte-identical to build-all (full diff -qr count 0); six key SHA-256s checked by the script",
+      "verified": "on the box: the produced tree is byte-identical to build-all (full diff -qr count 0); six key SHA-256s checked by the script. --build was also run from clean v029 and both binaries linked; ds4_mfma_test printed 'matrix-core layout test: ALL OK'.",
       "build": "reproduce-clean-v029.sh <v029.tar.gz> --build (docker image dcu-qwen3-5:perfect-0.0.1; LLAMA_DIR=/4T-02/strata-work/llama)"
     },
     "validated_on_box": {

@@ -109,7 +109,8 @@ cmake --build /work/build -j 40 --target strata-dsv41 ds4_mfma_test -- -k 0
 EOF
     chmod +x "$TARGET/build.sh"
     echo "=== build with $IMAGE ==="
-    docker run --rm -v "$TARGET:/work" -v "$LLAMA:/work/llama:ro" --cpus=48 \
-        --entrypoint bash "$IMAGE" /work/build.sh
+    docker run --rm -v "$TARGET:/work" -v "$LLAMA:/work/llama:ro" \
+        -v /opt/hyhal:/opt/hyhal:ro -v /usr/local/hyhal:/usr/local/hyhal:ro \
+        --cpus=48 --entrypoint bash "$IMAGE" /work/build.sh
     echo "built: $TARGET/build/strata-dsv41 and ds4_mfma_test"
 fi
