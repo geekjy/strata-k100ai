@@ -797,6 +797,12 @@
         "acceptance": "identische greedy token ids wie der Skalar-Pfad, KL <= 0.006 gegen die Referenz-Logits, A/B/A/B-Median fuer den Speed, und der Skalar-Pfad bleibt bit-identisch wenn DS4_FAST_ATTN nicht gesetzt ist",
         "effort": "3-5 Arbeitstage eines Kernel-Entwicklers mit Zugang zur Karte",
         "risks": "PV-Produkt hat eine andere Form, 64-Lane-Wellen brechen die 32-Lane-Annahmen der Softmax, und die Bankkonflikt-Polsterung kFaLd = 520 ist auf das WMMA-Layout abgestimmt"
+      },
+      "transfer_sizes": {
+        "container_image": "dcu-qwen3-5:perfect-0.0.1 = 26.2 GB (docker save/load)",
+        "model_for_pack7": "pack7/ 403 MB (inkl. expert-profile.bin 68 KB, das nicht fehlen darf) + DSV41-UNC-v7-q4k.gguf 350.3 GB + dspark 8.5 GB + mmproj 1.0 GB",
+        "sources": "strata und strata-exp je 98 MB; Build-Verzeichnisse je ~200 MB (nur kopieren, wenn kein Rebuild gewuenscht)",
+        "not_needed": "die alternativen GGUFs v3/v4/v5 (1.2 TB) bleiben zurueck"
       }
     }
   },
@@ -849,6 +855,7 @@
   "production": "unveraendert: Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200",
   "docs": {
     "operations": "docs/operations.md - Betriebshandbuch: Hardware, Deployment, Start/Stop/Rollback, Health, Baseline-Zahlen, Schalter (was laeuft, was nie, was gemessen und verworfen), die bereits bezahlten Fehlermodi, Rebuild-Anleitung, Packs, offene Punkte",
-    "mfma_attention": "docs/mfma-attention-port.md - Entwurf fuer die MFMA-Attention auf gfx928"
+    "mfma_attention": "docs/mfma-attention-port.md - Entwurf fuer die MFMA-Attention auf gfx928",
+    "deploy_new_machine": "docs/deploy-new-machine.md - Anleitung fuer eine zweite Maschine: Voraussetzungen, Image-Transfer (26.2 GB), Modell-Transfer (pack7 + v7-q4k.gguf + dspark + mmproj, ~360 GB), Quellen (Kopie 196 MB oder Upstream + die zwei Patches), Build, Serve, Abnahme, und was NICHT uebernommen werden darf"
   }
 }
