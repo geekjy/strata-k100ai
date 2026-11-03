@@ -34,7 +34,7 @@ own whole experts.
 
 | piece | path |
 |---|---|
-| engine | `/4T-02/strata-work/build-exp/strata-dsv41` |
+| engine | `/4T-02/strata-work/repro-build/build/strata-dsv41` (clean v0.2.9 reproduction; previous: `build-exp`) |
 | model pack | `/4T-02/dsv41-conv/pack7` (config + index) over `/4T-02/dsv41-conv/DSV41-UNC-v7-q4k.gguf` (350.3 GB) |
 | serve config | `/4T-02/strata-work/dsv41-serve-p7tp.json` |
 | start script | `/4T-02/strata-work/serve_pack7_tp.sh` (container `dsv41-serve`, port 8095) |
@@ -43,12 +43,17 @@ own whole experts.
 Effective engine line and environment:
 
 ```
-build-exp/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack7 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
-DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1
+repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack7 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
+DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1     # DS4_FAST_ATTN must stay unset
 ```
 
 `--restart unless-stopped` is set, but a `docker rm` still takes the service down — always
 re-run the start script after removing the container.
+
+Production was switched on 2026-11-03 21:32 to the clean v0.2.9 reproduction build
+(`repro-build/build/strata-dsv41`, scalar path; `DS4_FAST_ATTN` unset). The previous config is backed up at
+`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`; restore it and `docker restart dsv41-serve`
+to roll back. Health and a small inference request were verified after the switch.
 
 ## 3. Day-to-day commands (on the host)
 
@@ -169,7 +174,17 @@ Sources live under `/4T-02/strata-work/`:
 | tree | what |
 |---|---|
 | `strata` | the baseline tree the production baseline binary is built from |
-| `strata-exp` | the experimental tree (expert-TP + the probes); this is what `build-exp` compiles |
+| `strata-exp` | the previous experimental tree (expert-TP + the probes); this is what `build-exp` compiles |
+| `repro-build` | **current production**: the clean v0.2.9 reproduction (all seven patches + 0006); built by `sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh --build` |
+
+The one-command production build (replaces the manual route below):
+
+```bash
+sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh /path/to/v029.tar.gz \
+  --dir /4T-02/strata-work/repro-build --build
+```
+
+The manual `strata-exp` → `build-exp` route is kept for reference:
 
 ```bash
 # inside a container with /work mounted, with the DTK environment sourced:

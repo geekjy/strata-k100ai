@@ -1,5 +1,15 @@
 # 更新记录
 
+## 2026-11-03 生产切换到 clean v029 一键复现构建（scalar）
+
+- `dsv41-serve` 的 engine 从 `/4T-02/strata-work/build-exp/strata-dsv41` 切到
+  `/4T-02/strata-work/repro-build/build/strata-dsv41`（clean v0.2.9 + baseline + 0002/0003/0004 +
+  probes-base + expert-index-tp + 0006 的复现构建）。
+- `DS4_FAST_ATTN` 保持未设置，走标量路径；生成、健康检查和一次小请求已通过。
+- 旧配置备份：`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`；回滚时恢复该文件并
+  `docker restart dsv41-serve`。
+- repo 的 `ops/dsv41-serve-p7tp.json`、`ops/README.md`、`operations.md`、`deploy-new-machine.md` 已同步新路径。
+
 ## 2026-11-03 矩阵核心注意力移植：gfx928 用 MMAC（布局门/ids 通过；4K 无收益、10K 仅 +2.8%、KL 有保留；main，未打新标签）
 
 - 按 [mfma-attention-port.md](sources/dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md) 的设计实现

@@ -17,7 +17,9 @@ Both serve scripts assume:
 
 - the container image `dcu-qwen3-5:perfect-0.0.1`,
 - `/4T-02/dsv41-conv/pack7` (+ `DSV41-UNC-v7-q4k.gguf`, `dspark-UNC-bf16.gguf`, `mmproj-UNC-bf16.gguf`),
-- the engine binary at `/4T-02/strata-work/build-exp/strata-dsv41` (expert-TP) or
+- the engine binary at `/4T-02/strata-work/repro-build/build/strata-dsv41` (the clean v0.2.9
+  reproduction; production since 2026-11-03, `DS4_FAST_ATTN` unset), or
+  `/4T-02/strata-work/build-exp/strata-dsv41` (the previous production binary) /
   `/4T-02/strata-work/build-dsv41-full/strata-dsv41` (baseline),
 - the Python serve layer inside the image (`python3 -m serve.server`), which spawns the engine as a
   subprocess and restarts it if it dies.

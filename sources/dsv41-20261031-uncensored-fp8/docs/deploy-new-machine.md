@@ -92,6 +92,18 @@ patch -p1 < tools/patches-wip/expert-index-tp.patch          # -> expert-TP
 If either patch does not apply cleanly, stop and use route A — the trees are only 98 MB each and
 route A guarantees the exact code that was measured.
 
+Since 2026-11-03 production uses the **one-command clean v029 tree** (all seven patches, including
+`probes-base.patch` and `0006`):
+
+```bash
+sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh /path/to/v029.tar.gz \
+  --dir /4T-02/strata-work/repro-build --build
+```
+
+That builds `/4T-02/strata-work/repro-build/build/strata-dsv41`, the path in the serve config below.
+The manual `strata-exp` / `build-exp` route in section 5 remains valid as the previous build; if you
+use it, point the config back to `build-exp/strata-dsv41`.
+
 ## 5. Build
 
 Both trees build the same way; only the directory differs. Inside a container with `/work` mounted
@@ -123,7 +135,7 @@ ninja -C /work/build-exp -j 48 strata-dsv41
 
 ```bash
 # config (already in the copy): /4T-02/strata-work/dsv41-serve-p7tp.json
-#   {"exe":"/4T-02/strata-work/build-exp/strata-dsv41",
+#   {"exe":"/4T-02/strata-work/repro-build/build/strata-dsv41",
 #    "args":["--pack","/4T-02/dsv41-conv/pack7","--gpus","0,1","--tp","2","--dspark","on","--mmap-experts","on"],
 #    "cwd":"/4T-02/strata-work","model_name":"DeepSeek-V4.1-Flash-1017"}
 

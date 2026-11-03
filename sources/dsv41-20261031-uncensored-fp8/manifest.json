@@ -746,7 +746,7 @@
       },
       "production_deployment": {
         "date": "2026-11-03",
-        "engine": "build-exp/strata-dsv41 (Experten-Index-TP) mit --tp 2",
+        "engine": "repro-build/build/strata-dsv41 (clean v0.2.9 reproduction; previous: build-exp/strata-dsv41) mit --tp 2",
         "env": "DS4_EXPERT_TP=1 DS4_AR_RS2=1",
         "pack": "pack7 (Q4_K dichte Tensoren + IQ2_XXS Experten, 350.3 GB)",
         "dspark": "on",
@@ -853,7 +853,7 @@
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   },
-  "production": "unveraendert: Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200",
+  "production": "2026-11-03 21:32 auf repro-build/build/strata-dsv41 umgestellt (clean v0.2.9 + alle patches; DS4_FAST_ATTN unset, also Skalar-Pfad). Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200 und eine kleine Inference verifiziert; Rollback-Config unter /4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218",
   "docs": {
     "operations": "docs/operations.md - Betriebshandbuch: Hardware, Deployment, Start/Stop/Rollback, Health, Baseline-Zahlen, Schalter (was laeuft, was nie, was gemessen und verworfen), die bereits bezahlten Fehlermodi, Rebuild-Anleitung, Packs, offene Punkte",
     "mfma_attention": "docs/mfma-attention-port.md - Matrix-Core-Attention auf gfx928: MMAC (nicht MFMA), Layout-Gate ALL OK, 4K/10K ids gleich; 4K ohne Speed-Gewinn, 10K bestenfalls +2.8%, KL letzte Position 0.00131 / alle 0.0255 - nicht fuer Produktion",
