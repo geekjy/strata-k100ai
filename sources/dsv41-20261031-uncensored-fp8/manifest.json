@@ -786,6 +786,17 @@
           "DS4_ATTN_SPLIT=1": "prefill unveraendert, decode 23.39 -> 25.21 im A/B (+7.8%), attention 50.78 -> 43.34 ms - der einzige echte Gewinn, ist in Produktion"
         },
         "caveat": "Einzelmessungen schwanken um +/-20% (mehrfach belegt); Effekte unter ~10% sind nur mit A/B/A/B und Median nachweisbar"
+      },
+      "mfma_attention_design": {
+        "doc": "docs/mfma-attention-port.md",
+        "why": "DS4_FAST_ATTN (die Matrix-Core-Attention fuer den Chunk-Prompt) hebt nach Messung des Projektinhabers die Attention-Stufe um 5x und den Prefill um +14.7 % (8K, 4x R9700) bzw. +43.6 % (32K, Strix Halo)",
+        "why_it_crashes_here": "ds4_wmma.cuh hat nur Zweige fuer gfx11xx/gfx12xx; gfx928 faellt in den #else-Zweig mit __builtin_trap(), der Laufzeitfehler sieht wie ein VMFault aus",
+        "why_not_a_flag": "WMMA (wave32) legt pro Lane 16 Halves von A/B und 8 Float-Akkumulatoren an, MFMA (wave64) nur 4 Halden bzw. 4 Floats - die Lane-Daten-Zuordnung ist grundlegend anders",
+        "design": "eigenes ds4_mfma.cuh; Q und K liegen bereits in Shared Memory, also Operanden von dort statt per Shuffle; eine wave64 deckt zwei 16x16-Tiles = 8 Akkumulator-Floats, damit bleibt der f8v-Akkumulator des Kernels erhalten; kFaKeys 16 -> 32",
+        "first_step": "die (lane, register) -> (row, column) Zuordnung von V_MFMA_F32_16X16X16F16 aus der ISA-Referenz nehmen und mit einem Standalone-Test empirisch bestaetigen, bevor der Attention-Kernel angefasst wird",
+        "acceptance": "identische greedy token ids wie der Skalar-Pfad, KL <= 0.006 gegen die Referenz-Logits, A/B/A/B-Median fuer den Speed, und der Skalar-Pfad bleibt bit-identisch wenn DS4_FAST_ATTN nicht gesetzt ist",
+        "effort": "3-5 Arbeitstage eines Kernel-Entwicklers mit Zugang zur Karte",
+        "risks": "PV-Produkt hat eine andere Form, 64-Lane-Wellen brechen die 32-Lane-Annahmen der Softmax, und die Bankkonflikt-Polsterung kFaLd = 520 ist auf das WMMA-Layout abgestimmt"
       }
     }
   },
@@ -835,5 +846,5 @@
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   },
-  "production": "Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200"
+  "production": "unveraendert: Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200"
 }
