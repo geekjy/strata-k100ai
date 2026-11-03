@@ -229,9 +229,12 @@ The expert-TP change is exported as a patch: `sources/dsv41-20261031-uncensored-
 | pack7 | Q4_K | IQ2_XXS | `DSV41-UNC-v7-q4k.gguf`, 350.3 GB — previous quantized production |
 
 Production switched to pack8 at 23:57: IQ1_S experts (106.2 GB) fit entirely in the two cards' VRAM;
-native dense/Engram stay on CPU. Quality is below pack4; the fast-attn experiment remains on. Switching
-packs is a config edit (`dsv41-serve-p7tp.json`), not a rebuild. The quantisation was ruled out as a
-crash cause by running pack4 and pack7 side by side.
+native dense/Engram stay on CPU. Quality is below pack4; the fast-attn experiment remains on. A controlled
+decode A/B (2026-11-04, same 45-token prompt, 256 generated tokens, DSpark on) measured:
+**pack8 IQ1_S 26.2 / 26.7 / 26.6 tok/s** vs **pack7 IQ2_XXS 35.2 / 36.3 / 36.6 tok/s** (prompt
+16.6–17.4 vs 21.4–23.1 tok/s). IQ1_S does **not** win: it fills VRAM but its dequant/matvec is slower,
+and DSpark accepts fewer drafts (167/220 vs 184/224 in that test). The 12.9 tok/s first short request
+was a cold 14-token sample, not the stable decode rate.
 
 ### IQ1_S pack build (2026-11-03)
 

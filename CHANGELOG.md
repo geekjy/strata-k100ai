@@ -9,6 +9,10 @@
   `expert-profile.bin`/`slots` 从 pack4 复制（路由与量化无关），DSpark noise_token 128799。
 - `dsv41-serve` 已切到 `--pack /4T-02/dsv41-conv/pack8`；`DS4_FAST_ATTN=1` 保持。health 200，
   一次真实请求返回 OK；加载后约 **146 GB RAM**（全部专家进 VRAM）。
+- 2026-11-04 受控 decode A/B（45-token prompt，生成 256 token，DSpark on）：pack8 IQ1_S
+  **26.2 / 26.7 / 26.6 tok/s**，pack7 IQ2_XXS **35.2 / 36.3 / 36.6 tok/s**（prompt 16.6–17.4 vs
+  21.4–23.1）。IQ1_S 不是速度赢家：显存吃满但反量化/matvec 更慢，DSpark 接受草稿也少
+  （167/220 vs 184/224）。之前记录的 12.9 tok/s 是首个 14-token 冷请求，不是稳定 decode 速率。
 - 质量低于原生 pack4；这是显存吃满/速度的取舍。回滚 pack4 配置：
   `/4T-02/strata-work/dsv41-serve-p7tp.json.bak-pack4-20261103-235735`。
 - 量化产物较大：`DSV41-UNC-v3-iq1s.gguf` 325.8 GB + pack8 4.1 MB。
