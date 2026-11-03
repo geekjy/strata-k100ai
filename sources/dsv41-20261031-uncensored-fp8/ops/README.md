@@ -27,10 +27,12 @@ Both serve scripts assume:
 Environment that matters (see `../docs/operations.md` section 5):
 
 ```
-DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1     # production
+DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production since 2026-11-03 21:43 (explicit experiment)
 ```
 
-`DS4_FAST_ATTN` must stay unset here: without `0006-mfma-attention.patch` it traps on gfx928; with the
-patch gfx928 uses **MMAC** (not MFMA), the layout gate and 4K/10K ids pass, but the controlled 4K
-A/B/A/B measured **no prefill gain** and 10K only about **+2.8 %**; the all-prompt KL mean is 0.0255
-(last-position 0.00131). Details: `../docs/mfma-attention-port.md` section 10.
+`DS4_FAST_ATTN` was unset before 2026-11-03 21:43. It is now enabled on the clean v0.2.9
+reproduction (`repro-build/build/strata-dsv41`), so gfx928 takes the **MMAC** path. Caveat: the
+controlled 4K A/B/A/B measured **no prefill gain**, 10K only about **+2.8 %**, and the all-prompt KL
+mean is 0.0255 (last-position 0.00131). To roll back to scalar, restore
+`/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315` and re-run it (or remove the
+`-e DS4_FAST_ATTN=1` line and re-run). Details: `../docs/mfma-attention-port.md` section 10.

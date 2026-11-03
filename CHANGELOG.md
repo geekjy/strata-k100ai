@@ -1,14 +1,18 @@
 # 更新记录
 
-## 2026-11-03 生产切换到 clean v029 一键复现构建（scalar）
+## 2026-11-03 生产切换到 clean v029 复现构建；21:43 开启 DS4_FAST_ATTN=1
 
 - `dsv41-serve` 的 engine 从 `/4T-02/strata-work/build-exp/strata-dsv41` 切到
   `/4T-02/strata-work/repro-build/build/strata-dsv41`（clean v0.2.9 + baseline + 0002/0003/0004 +
   probes-base + expert-index-tp + 0006 的复现构建）。
-- `DS4_FAST_ATTN` 保持未设置，走标量路径；生成、健康检查和一次小请求已通过。
-- 旧配置备份：`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`；回滚时恢复该文件并
-  `docker restart dsv41-serve`。
-- repo 的 `ops/dsv41-serve-p7tp.json`、`ops/README.md`、`operations.md`、`deploy-new-machine.md` 已同步新路径。
+- 21:43 再次重启，加入 `DS4_FAST_ATTN=1`，gfx928 走 **MMAC** 路径；健康检查、真实请求均通过。
+  Caveat 不变：4K 受控 A/B/A/B 无收益、10K 最好约 +2.8%、全 prompt 位置 KL 平均 0.0255
+  （last-position 0.00131）。这是显式生产实验，不是默认推荐。
+- 旧配置备份：`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`；旧启动脚本备份：
+  `/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`。回滚：恢复脚本（以及需要时恢复旧配置）并重跑
+  `serve_pack7_tp.sh`。
+- repo 的 `ops/dsv41-serve-p7tp.json`、`ops/serve_pack7_tp.sh`、`ops/README.md`、`operations.md`、
+  `deploy-new-machine.md` 已同步。
 
 ## 2026-11-03 矩阵核心注意力移植：gfx928 用 MMAC（布局门/ids 通过；4K 无收益、10K 仅 +2.8%、KL 有保留；main，未打新标签）
 

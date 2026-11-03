@@ -44,16 +44,18 @@ Effective engine line and environment:
 
 ```
 repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack7 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
-DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1     # DS4_FAST_ATTN must stay unset
+DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production experiment since 21:43
 ```
 
 `--restart unless-stopped` is set, but a `docker rm` still takes the service down — always
 re-run the start script after removing the container.
 
 Production was switched on 2026-11-03 21:32 to the clean v0.2.9 reproduction build
-(`repro-build/build/strata-dsv41`, scalar path; `DS4_FAST_ATTN` unset). The previous config is backed up at
-`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`; restore it and `docker restart dsv41-serve`
-to roll back. Health and a small inference request were verified after the switch.
+(`repro-build/build/strata-dsv41`), and at 21:43 it was restarted with `DS4_FAST_ATTN=1` (MMAC path,
+explicit production experiment). The pre-switch config is backed up at
+`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`, and the pre-fast-attn start script at
+`/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`; restore those and re-run the start script to
+roll back. Health and a small inference request were verified after both changes.
 
 ## 3. Day-to-day commands (on the host)
 
@@ -117,7 +119,7 @@ decode: 64 tokens in 2357 ms (26.73 tok/s); CPU lane: 1436 of 19320 experts
 
 | switch | why |
 |---|---|
-| `DS4_FAST_ATTN=1` | opt-in matrix-core attention. Without `patches/0006-mfma-attention.patch` it selects the WMMA kernel; `ds4_wmma.cuh` has no gfx9 branch and executes `__builtin_trap()` (it looks like a VMFault). With 0006 on gfx928 it uses **MMAC** (not MFMA), and it has been built and run on the card: `matrix-core layout test: ALL OK`, 4K/10K ids identical. **Do not enable it in production**: a controlled 4K A/B/A/B showed **no prefill gain** and 10K only about **+2.8 %**; the all-prompt-position KL mean is 0.0255 (last-position 0.00131). See `docs/mfma-attention-port.md` section 10. |
+| `DS4_FAST_ATTN=1` | **enabled in production since 2026-11-03 21:43 as an explicit experiment**. Without `patches/0006-mfma-attention.patch` it selects the WMMA kernel; `ds4_wmma.cuh` has no gfx9 branch and executes `__builtin_trap()`. With 0006 on gfx928 it uses **MMAC** (not MFMA); layout gate and 4K/10K ids pass, but a controlled 4K A/B/A/B showed **no prefill gain** and 10K only about **+2.8 %**; the all-prompt-position KL mean is 0.0255 (last-position 0.00131). Roll back by restoring `serve_pack7_tp.sh.bak-20261103-214315` and re-running. See `docs/mfma-attention-port.md` section 10. |
 
 ### 5.3 Measured and rejected (do not re-litigate without new data)
 

@@ -10,11 +10,13 @@ for i in $(seq 1 30); do docker ps --format '{{.Names}}' | grep -qx dsv41-serve 
 docker rm -f dsv41-serve >/dev/null 2>&1
 sleep 2
 
+# DS4_FAST_ATTN=1: the gfx928 MMAC path (opt-in; 4K A/B/A/B was neutral, 10K best +2.8%,
+# all-prompt KL 0.0255, so this is an explicit production experiment, not the default recommendation).
 docker run -d --name dsv41-serve --restart unless-stopped --privileged \
   --device /dev/kfd --device /dev/dri \
   -v /usr/local/hyhal:/usr/local/hyhal:ro -v /opt/hyhal:/opt/hyhal:ro \
   -v /4T-02:/4T-02 -p 8095:8095 \
-  -e DS4_AR_RS2=1 -e DS4_EXPERT_TP=1 -e DS4_ATTN_SPLIT=1 \
+  -e DS4_AR_RS2=1 -e DS4_EXPERT_TP=1 -e DS4_ATTN_SPLIT=1 -e DS4_FAST_ATTN=1 \
   -w /4T-02/strata-work/strata \
   --entrypoint bash dcu-qwen3-5:perfect-0.0.1 -lc '
     source /opt/dtk/env.sh 2>/dev/null
