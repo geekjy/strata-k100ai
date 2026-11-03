@@ -29,6 +29,6 @@ DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1     # production
 ```
 
 `DS4_FAST_ATTN` must stay unset here: without `0006-mfma-attention.patch` it traps on gfx928; with the
-patch gfx928 uses **MMAC** (not MFMA), the layout gate and 16-token ids pass, but the controlled 4K
-A/B/A/B measured **no prefill gain** (best MMAC ~2 % slower) and the all-prompt KL mean is 0.0255
+patch gfx928 uses **MMAC** (not MFMA), the layout gate and 4K/10K ids pass, but the controlled 4K
+A/B/A/B measured **no prefill gain** and 10K only about **+2.8 %**; the all-prompt KL mean is 0.0255
 (last-position 0.00131). Details: `../docs/mfma-attention-port.md` section 10.

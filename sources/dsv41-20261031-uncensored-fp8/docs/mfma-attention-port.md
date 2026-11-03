@@ -151,8 +151,9 @@ Run it on the box before trusting `DS4_FAST_ATTN=1`.
 3. **Speed**: prefill tok/s on a 4K and a 10K prompt, A/B/A/B with a median (single runs on this box
    vary by +/-20 %). **Box: a controlled 4K A/B/A/B (`--window 512`) showed no gain** — scalar 95,503 /
    95,081 ms (42.72 / 42.91 tok/s), MMAC 97,291 / 114,571 ms (41.94 / 35.61 tok/s); the best MMAC run
-   was about 2 % slower. An earlier 118,187 -> 97,096 ms "pair" was a cold first run and is retracted.
-   10K was not run.**
+   was about 2 % slower. **A clean full-tree build at 10K showed at best +2.8 %** — scalar 267,470 /
+   294,686 ms (38.14 / 34.61 tok/s), MMAC 260,126 / 266,104 ms (39.21 / 38.33 tok/s). That is not the
+   design's +30-45 %. An earlier 118,187 -> 97,096 ms "pair" was a cold first run and is retracted.**
 4. **Regression**: `DS4_FAST_ATTN` unset must keep the scalar path bit-identical. **Box: ids match
    with the scalar path; a full tensor comparison was not run.**
 
@@ -165,8 +166,8 @@ Run it on the box before trusting `DS4_FAST_ATTN=1`.
    (`__shfl_xor_sync(0xffffffffu, ...)`, `lane = tid & 31`) must be revisited; the kernel's
   `__syncthreads()` / bank-conflict padding (`kFaLd = 520`) was tuned for the WMMA layout.
 - Expected payoff if it lands: **+30-45 % prefill on long prompts** (the owner's 32K number),
-  decode unchanged. **Measured first: no gain on a 4K, `--window 512` controlled A/B/A/B; the best
-  MMAC run was about 2 % slower than scalar. The owner's long-prompt gain did not reproduce here.**
+  decode unchanged. **Measured first: no gain on a 4K controlled A/B/A/B; at 10K the best MMAC run is
+  only about +2.8 %. The owner's long-prompt gain did not reproduce here.**
 
 ## 8. Cheaper things to try before committing to the port
 
@@ -257,17 +258,22 @@ End-to-end, on pack7 with expert-index TP, `--tp 2`, `--dspark none`, same binar
 | run | scalar (`DS4_FAST_ATTN=0`) | MMAC (`=1`) | result |
 |---|---|---|---|
 | 4K A/B/A/B, `--window 512` | **95,503 / 95,081 ms** (42.72 / 42.91 tok/s) | **97,291 / 114,571 ms** (41.94 / 35.61 tok/s) | **no gain**; best MMAC ~2 % slower |
+| 10K A/B/A/B, `--window 512`, full build | **267,470 / 294,686 ms** (38.14 / 34.61 tok/s) | **260,126 / 266,104 ms** (39.21 / 38.33 tok/s) | best MMAC **+2.8 %**; scalar outlier 294.7 s widens the median |
 | earlier cold first scalar | 118,187 ms | 97,096 ms | **retracted**: cold run, not an A/B |
 | generated ids (4K, 16 tokens) | `671,6102,294,8760,344,11111,16,1` | same | identical |
+| generated ids (10K, 2 tokens) | `32111,377` | same | identical (four comparable runs) |
 | generated ids (17 tokens) | `671,6102,294,8760` | same | identical (window path, not the fast path) |
 
 `--window 512` forces the chunked prompt path; the MMAC runs logged 560 launches of
-`ds4: fast attn T=512 heads=32 gen=1`. The warm-up run (scalar, 103,318 ms) is excluded from the A/B/A/B.
-The earlier single pair (118,187 -> 97,096 ms, "+21.7 %") was the first run after stopping the service and
-was taken while the caches/clocks were still cold; it must not be quoted as a speedup. In the controlled
-runs the **best MMAC time is slower than scalar**, so this is a negative result for the 4K workload: the
-extra staging/conversion work is not paid back by the matrix core here. The 10K/32K cases remain
-unmeasured; the owner's long-prompt gain did not reproduce on this box.
+`ds4: fast attn T=512 heads=32 gen=1`. The 4K warm-up run (scalar, 103,318 ms) is excluded from its
+A/B/A/B; the 10K warm-up produced different ids (`2337,344`) and is treated as a cold-start anomaly, not
+part of the four comparable runs. The earlier single pair (118,187 -> 97,096 ms, "+21.7 %") was the
+first run after stopping the service and was taken while the caches/clocks were still cold; it must not
+be quoted as a speedup.
+
+The result is **negative at 4K** and only **+2.8 % best at 10K**; the design's +30-45 % did not
+reproduce. The 32K case remains unmeasured. The extra 32-key staging and FP16 conversion are not paid
+back here except marginally at 10K.
 
 KL is the other open part. On the 4K dump (3601 rows) the all-position mean is **0.0255**, max 1.595,
 592 rows > 0.006, and 101 rows have a different argmax. The **last-position logits — the ones used to
@@ -292,11 +298,11 @@ oracle passes, the all-position gate does not.
 - **All-position KL**: mean 0.0255 > 0.006; find the 592 divergent rows before making the path the
   default. The concentration (most rows identical, some far off) suggests a row-selection or
   tile-boundary issue rather than general rounding.
-- **A proper A/B/A/B on 10K/32K prompts**; the 4K A/B/A/B already shows **no gain**, so a long-prompt
-  retest is needed before spending more on this path.
+- **32K A/B**; 4K and 10K are done (4K no gain, 10K best +2.8 %). The design's 32K/5.5x claim is the
+  remaining long-context check; given the 10K result it is unlikely to be the +30-45 % lever.
 - **Why the gain disappeared**: measure the attention share of this prefill (the fast kernel adds
-  32-key staging and FP16 conversions; on the 4K run it is a net loss). The owner's 32K/5.5x attention
-  stage result does not reproduce on this box.
+  32-key staging and FP16 conversions; at 4K it is a net loss, at 10K only +2.8 %). The owner's 32K/5.5x
+  attention-stage result does not reproduce on this box.
 - **Production default window**: the fast path was forced with `--window 512`; confirm it triggers for
   the service's normal long prompts.
 - **Full tensor regression** of `DS4_FAST_ATTN` unset vs `=0` (ids match; tensors were not compared).

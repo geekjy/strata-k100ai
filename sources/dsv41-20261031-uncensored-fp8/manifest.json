@@ -769,14 +769,14 @@
         "allreduce_pipelining": "verworfen: die Wartezeit auf die CPU lane ist 3.17 ms, routing waits 0.00 - ein Umbau des All-Reduce haette kaum etwas gebracht",
         "vram_experts": "verworfen: max-context 32768 -> 12288 -> 8192 aendert die Zahl der VRAM-Experten nur um 5803 -> 5808 -> 5809 (+0.1%), weil der KV-Cache dieses Modells winzig ist (0.03 -> 0.01 GB)",
         "attention_split": "DS4_ATTN_SPLIT=1 (der Split-KV-Kernel des Projekts, fuer eine Query gebaut): im A/B-Vergleich 23.39 -> 25.21 tok/s (+7.8%) und attention 50.78 -> 43.34 ms; in Produktion aktiviert, drei Messungen 23.1 / 23.6 / 29.8 tok/s (Median 23.6)",
-        "fast_attn_is_broken": "ohne 0006: DS4_FAST_ATTN=1 endet im VMFault (kein gfx9-WMMA-Zweig). Mit 0006: gfx928 nutzt MMAC, Layout-Gate ALL OK, 16-Token-ids gleich; aber ein kontrollierter 4K-A/B/A/B zeigt KEINEN Prefill-Gewinn (beste MMAC ~2% langsamer) und die KL-Werte sind offen (alle Positionen 0.0255, letzte 0.00131) - nicht fuer Produktion",
+        "fast_attn_is_broken": "ohne 0006: DS4_FAST_ATTN=1 endet im VMFault (kein gfx9-WMMA-Zweig). Mit 0006: gfx928 nutzt MMAC, Layout-Gate ALL OK, 4K/10K ids gleich; aber ein kontrollierter 4K-A/B/A/B zeigt KEINEN Prefill-Gewinn, 10K bestenfalls ~+2.8%, und die KL-Werte sind offen (alle Positionen 0.0255, letzte 0.00131) - nicht fuer Produktion",
         "attention_and_head_are_already_split": "NHL = g.heads / head_members(nm) und d.logits_part pro Mitglied: die Aufteilung von attention und Ausgabe-Kopf macht die Engine bereits von sich aus"
       },
       "tuning_sweep": {
         "fast_attn": {
           "what": "DS4_FAST_ATTN waehlt sparse_attn_wmma_kernel (Matrix-Core-Attention fuer den gepackten KV)",
           "why_it_crashes": "der Quellkommentar sagt es selbst: nur gfx12 (R9700) ist validiert, gfx11/gfx1151 sind ungetestet, und DS4_FAST_ATTN=1 schaltet es anderswo ein - gfx928 gehoert dazu",
-          "verdict": "ohne 0006 AUS (VMFault); mit 0006 gfx928 = MMAC, Layout-Gate/ids validiert, aber kein Speed-Gewinn im kontrollierten 4K-A/B/A/B und KL offen -> AUS lassen"
+          "verdict": "ohne 0006 AUS (VMFault); mit 0006 gfx928 = MMAC, Layout-Gate/ids validiert, aber 4K kein Speed-Gewinn, 10K nur ~+2.8% und KL offen -> AUS lassen"
         },
         "measured_on_a_4080_token_prompt_DSpark_on": {
           "control": "prefill 138.23 tok/s, decode 26.73 tok/s",
@@ -795,7 +795,7 @@
         "why_not_a_flag": "gfx928 hat KEIN MFMA: DTK clang 17 meldet 'needs target feature mai-insts'; die Matrix-Core-Instruktion ist MMAC (V_MMAC_F32_16X16X16_F16). MMAC und MFMA teilen das A/B-Layout, aber C ist transponiert: MMAC Zeile = lane&15, Spalte = (lane>>4)+4i; MFMA umgekehrt",
         "design": "eigenes ds4_mfma.cuh: MMAC auf gfx928, MFMA auf CDNA; Q und K liegen bereits in Shared Memory, also Operanden von dort statt per Shuffle; eine wave64 deckt zwei 16x16-Tiles = 8 Akkumulator-Floats, damit bleibt der f8v-Akkumulator des Kernels erhalten; kFaKeys 16 -> 32",
         "first_step": "die MMAC-Zuordnung aus /opt/dtk/include/du_mma.hpp nehmen und mit einem Standalone-Test empirisch bestaetigen - auf der Karte: matrix-core layout test ALL OK (ein Schritt, mma_scores, mma_pv, je 0 mismatch)",
-        "acceptance": "ids: 4K 16 Token 671,6102,294,8760,344,11111,16,1 und 17-Token 671,6102,294,8760 identisch; KL: letzte Position 0.00131 (< 0.006), alle 3601 Positionen im Mittel 0.0255 (max 1.595, 592 Zeilen > 0.006) - letzteres offen; Speed: kontrollierter 4K-A/B/A/B ohne Gewinn (Skalar 95.5/95.1 s, MMAC 97.3/114.6 s; beste MMAC ~2% langsamer) - der fruehere 118.2 -> 97.1 ms-Lauf war kalt und ist zurueckgezogen; Skalar-Pfad bei ungesetztem DS4_FAST_ATTN nicht vollstaendig tensor-verglichen",
+        "acceptance": "ids: 4K 16 Token 671,6102,294,8760,344,11111,16,1, 10K 2 Token 32111,377 und 17-Token 671,6102,294,8760 identisch; KL: letzte Position 0.00131 (< 0.006), alle 3601 Positionen im Mittel 0.0255 (max 1.595, 592 Zeilen > 0.006) - letzteres offen; Speed: kontrollierter 4K-A/B/A/B ohne Gewinn (Skalar 95.5/95.1 s, MMAC 97.3/114.6 s), 10K-A/B/A/B bestenfalls +2.8% (Skalar 267.5/294.7 s, MMAC 260.1/266.1 s) - der fruehere 118.2 -> 97.1 ms-Lauf war kalt und ist zurueckgezogen; Skalar-Pfad bei ungesetztem DS4_FAST_ATTN nicht vollstaendig tensor-verglichen",
         "effort": "3-5 Arbeitstage eines Kernel-Entwicklers mit Zugang zur Karte",
         "risks": "PV-Produkt hat eine andere Form, 64-Lane-Wellen brechen die 32-Lane-Annahmen der Softmax, und die Bankkonflikt-Polsterung kFaLd = 520 ist auf das WMMA-Layout abgestimmt"
       },
@@ -856,7 +856,7 @@
   "production": "unveraendert: Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200",
   "docs": {
     "operations": "docs/operations.md - Betriebshandbuch: Hardware, Deployment, Start/Stop/Rollback, Health, Baseline-Zahlen, Schalter (was laeuft, was nie, was gemessen und verworfen), die bereits bezahlten Fehlermodi, Rebuild-Anleitung, Packs, offene Punkte",
-    "mfma_attention": "docs/mfma-attention-port.md - Matrix-Core-Attention auf gfx928: MMAC (nicht MFMA), Layout-Gate ALL OK, 16-Token-ids gleich; kontrollierter 4K-A/B/A/B ohne Speed-Gewinn, KL letzte Position 0.00131 / alle 0.0255 - nicht fuer Produktion",
+    "mfma_attention": "docs/mfma-attention-port.md - Matrix-Core-Attention auf gfx928: MMAC (nicht MFMA), Layout-Gate ALL OK, 4K/10K ids gleich; 4K ohne Speed-Gewinn, 10K bestenfalls +2.8%, KL letzte Position 0.00131 / alle 0.0255 - nicht fuer Produktion",
     "deploy_new_machine": "docs/deploy-new-machine.md - Anleitung fuer eine zweite Maschine: Voraussetzungen, Image-Transfer (26.2 GB), Modell-Transfer (pack7 + v7-q4k.gguf + dspark + mmproj, ~360 GB), Quellen (Kopie 196 MB oder Upstream + die zwei Patches), Build, Serve, Abnahme, und was NICHT uebernommen werden darf"
   }
 }

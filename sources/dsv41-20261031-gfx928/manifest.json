@@ -143,20 +143,20 @@
     "模型加载与整模型推理（本目录不含权重，官方 2.00bpw 需 138 GB + Engram 111 GB + DSpark 8 GB）",
     "注意力 / 路由 / 超连接 / 长上下文的整模型数值（ds4_iq_test 只覆盖 i-quant 专家内核）",
     "真实专家规模下的显存与内存分层",
-    "10K/32K 提示词的 A/B（4K 受控 A/B/A/B 已做，无速度收益）",
+    "32K 提示词的 A/B（4K/10K 已做；10K 最好也只有约 +2.8%）",
     "全 prompt 位置的 KL 0.006 门槛（last-position 0.00131 通过，全位置平均 0.0255 不通过）",
     "字节级可复现（clean_rebuild_verified 为 false）"
   ],
   "known_traps": [
     "gfx928 没有 MFMA：DTK 26.04 / clang 17 对 __builtin_amdgcn_mfma_f32_16x16x16f16 报 \"needs target feature mai-insts\"；gfx928 的矩阵核是 MMAC（__builtin_amdgcn_mmac_f32_16x16x16f16，V_MMAC_F32_16X16X16_F16）。0006 补丁在 gfx928 上按 MMAC 实现，CDNA 才走 MFMA",
-    "DS4_FAST_ATTN=1 的布局门和 16-token ids 已过，但**受控 A/B/A/B 没有预填充速度收益**（最好的一次仍慢约 2%），且 KL 门槛有保留：全 prompt 位置平均 0.0255，last-position 0.00131；默认不开启，也不建议生产启用",
+    "DS4_FAST_ATTN=1 的布局门和 ids 已过，但**4K A/B/A/B 没有速度收益，10K 最好也只有约 +2.8%**，且 KL 门槛有保留：全 prompt 位置平均 0.0255，last-position 0.00131；默认不开启，也不建议生产启用",
     "只挂 renderD128 或未挂宿主机 HyHAL 时卡被识别为 KONGMING，HIP 报 no ROCm-capable device"
   ],
   "mfma_attention": {
     "patch": "patches/0006-mfma-attention.patch",
     "sha256": "8cdd50b4e845c74ba9d6da29f34ad5435fb640dc4154f95bcd38580bae779ae3",
     "bytes": 35890,
-    "status": "implemented and validated on K100_AI (gfx928, MMAC): layout gate ALL OK, 16-token ids identical; controlled A/B/A/B shows no prefill speedup (best MMAC about 2% slower) and all-prompt-position KL is not under the 0.006 bar",
+    "status": "implemented and validated on K100_AI (gfx928, MMAC): layout gate ALL OK, ids identical; 4K A/B/A/B shows no prefill gain, 10K shows at best about +2.8%, and all-prompt-position KL is not under the 0.006 bar",
     "design": "../dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md",
     "apply_order": "after the baseline (patches/0001..0005 or tools/patches-wip/baseline-gfx928-port.patch); on the production tree also after tools/patches-wip/expert-index-tp.patch, then this patch",
     "what": "gfx928's matrix core is MMAC, not MFMA: sparse_attn_wmma_kernel uses __builtin_amdgcn_mmac_f32_16x16x16f16 (C row = lane&15, col = (lane>>4)+4i); the CDNA parts keep MFMA. Two 16x16 tiles a wave, 32 keys a tile, 4 waves x 128 dims; gfx11/gfx12 WMMA unchanged; DS4_FAST_ATTN stays opt-in on gfx9",
@@ -206,6 +206,7 @@
       "device": "gfx928:sramecc+:xnack- (K100_AI)",
       "dtk": "26.04 / clang 17.0.0",
       "not_in_patch": "the validated binary came from strata-exp = baseline + expert-index-tp + 0006. Its earlier K100AI T==1 decode 8-row prefetch is part of expert-index-tp.patch, not 0006; it is decode-only, does not run on the T=512 prefill slab, and the MMAC device kernel is line-identical between the validated tree and 0006.",
+      "build_source": "the all-changes build (build-all) was made from strata-exp + 0006. A clean v029 + baseline + probe patches + expert-index-tp still rejects one ds4_model.cu hunk because expert-index-tp expects the local probe base; reproduce by copying the two working trees (tools/patches-wip/README.md).",
       "instruction_discovery": "the DTK clang rejects __builtin_amdgcn_mfma_f32_16x16x16f16 on gfx928 ('needs target feature mai-insts'); gfx928 has __builtin_amdgcn_mmac_f32_16x16x16f16 and V_MMAC_F32_16X16X16_F16 (/opt/dtk/include/du_mma.hpp gives the lane map). A raw one-step probe matched the CPU product with 0 mismatches; random-value precision was 1.75e-7 (one step) / 2.05e-6 (16 steps) max absolute vs FP64.",
       "layout_test": "matrix-core layout test: ALL OK (one step + mma_scores + mma_pv, 0 mismatches each)",
       "prefill_ab": {
@@ -222,7 +223,21 @@
         "result": "no speedup: the best MMAC run (97.3 s) is about 2% slower than the scalar runs (95.1-95.5 s); one MMAC outlier (114.6 s) makes the median worse",
         "note": "the earlier single 118187 -> 97096 ms pair was a cold first run and is retracted; it is not an A/B"
       },
-      "ids": "4k prompt, 16 greedy tokens: 671,6102,294,8760,344,11111,16,1 identical for scalar and MMAC; the 17-token prompt gives 671,6102,294,8760 (the short run uses the window path, not the fast path)",
+      "prefill_ab_10k": {
+        "prompt_tokens": 10200,
+        "window": 512,
+        "max_context": 12288,
+        "binary": "build-all (full production tree + 0006; clean build)",
+        "order": "warm-up then scalar, MMAC, scalar, MMAC (A/B/A/B)",
+        "warmup_scalar_ms": 269460,
+        "scalar_ms": [267470, 294686],
+        "scalar_tok_s": [38.14, 34.61],
+        "mmac_ms": [260126, 266104],
+        "mmac_tok_s": [39.21, 38.33],
+        "result": "best MMAC is about 2.8% faster (260.1 vs 267.5 s); the scalar 294.7 s outlier widens the median but this is far from the design's +30-45%",
+        "note": "the 10K warm-up scalar produced different ids (2337,344) from the four comparable runs (32111,377); treated as a cold-start anomaly, not part of the comparison"
+      },
+      "ids": "4k prompt, 16 greedy tokens: 671,6102,294,8760,344,11111,16,1 identical for scalar and MMAC; 10k prompt, 2 tokens: the four comparable runs all give 32111,377; the 17-token prompt gives 671,6102,294,8760 (the short run uses the window path, not the fast path)",
       "fast_path_log": "with --window 512, 560 launches logged 'ds4: fast attn T=512 heads=32 gen=1'",
       "kl": {
         "rows": 3601,
@@ -242,7 +257,7 @@
       "the patch applies cleanly to a fresh v0.2.9 + baseline-gfx928-port tree and reproduces the four hashes above"
     ],
     "not_verified": [
-      "10K/32K prompts and the production default window (the 4K controlled A/B/A/B showed no gain; larger prompts were not run)",
+      "32K prompts and the production default window (the 4K and 10K A/B/A/B are done; 10K's best gain is about 2.8%)",
       "10K/32K prompts and the production default window (the 4k test used --window 512 to force the chunked path)",
       "all-prompt-position KL under 0.006: the mean is 0.0255; only the last-position/generation logits pass (0.00131)",
       "a full tensor comparison of DS4_FAST_ATTN unset vs 0 on the production tree (ids match; tensors were not compared)",

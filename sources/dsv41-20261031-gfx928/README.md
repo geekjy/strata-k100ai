@@ -115,21 +115,28 @@ gfx9 上 `DS4_FAST_ATTN` 未设置时仍走标量内核。
 0006 只改四个文件（新 `src/dsv41/ds4_mfma.cuh`、`ds4_kernels.cu`、新 `tests/dsv41/mfma_layout_test.cpp`、
 `CMakeLists.txt`），并新增 `ds4_mfma_test` 目标（`CMAKE_HIP_ARCHITECTURES` 里有矩阵核架构时才生成）。
 
+**全量重编的实测树**用的是现成 `strata-exp` + 0006（`build-all`）。把 `baseline-gfx928-port.patch` +
+`patches/0002/0003/0004` + `expert-index-tp.patch` 叠到干净 v029 时，`expert` 在 `ds4_model.cu` 还有一个
+hunk 拒绝（它的基树还带本地 probe 改动）；干净复现请按 `tools/patches-wip/README.md` 的“直接拷贝两棵
+工作树”路线，或先把 probe 基树补齐。
+
 **实测（2026-11-03，K100_AI / gfx928）**
 
 | 项目 | 结果 |
 | --- | --- |
-| 布局门 `ds4_mfma_test` | **`matrix-core layout test: ALL OK`**：单步、`mma_scores`、`mma_pv` 三项各 0 mismatch |
+| 布局门 `ds4_mfma_test` | **`matrix-core layout test: ALL OK`**：单步、`mma_scores`、`mma_pv` 三项各 0 mismatch（全量重编的 `build-all` 也通过） |
 | 4K A/B/A/B（warm-up 不计；pack7，expert-TP，`--window 512`） | 标量 **95,503 / 95,081 ms**（42.72 / 42.91 tok/s）；MMAC **97,291 / 114,571 ms**（41.94 / 35.61 tok/s）。**最好的一次 MMAC 也比标量慢约 2%，一次 114.6 s 的离群值把中位数拉得更差；没有速度收益** |
+| **10K A/B/A/B**（全量重编的 `build-all`，同一 4K 条件） | 标量 **267,470 / 294,686 ms**（38.14 / 34.61 tok/s）；MMAC **260,126 / 266,104 ms**（39.21 / 38.33 tok/s）。**最好的一次 MMAC 快约 2.8%；标量有一次 294.7 s 离群，使中位数差异看起来更大；这不是设计预期的 +30~45%** |
 | 早先的单次 118,187 ms | 冷启动/缓存未热，不能当 A/B，已作废；据此算出的 +21.7% 不成立 |
-| 生成 ids（16 token） | 两边完全一致：`671,6102,294,8760,344,11111,16,1` |
+| 生成 ids（4K，16 token） | 两边完全一致：`671,6102,294,8760,344,11111,16,1` |
+| 生成 ids（10K，2 token） | 可比的 scalar/MMAC 四次都是 `32111,377`；warm-up 首跑是 `2337,344`（冷启动异常，不计入对比） |
 | 快速路径确认 | `--window 512` 下 560 次 `ds4: fast attn T=512 heads=32 gen=1` |
-| KL（全 prompt 位置，3601 行） | 平均 **0.0255**、最大 1.595、592 行 >0.006、101 行 argmax 不同；**last-position 0.00131（生成 oracle 通过）**，最后 10 行 argmax 全同 |
+| KL（4K 全 prompt 位置，3601 行） | 平均 **0.0255**、最大 1.595、592 行 >0.006、101 行 argmax 不同；**last-position 0.00131（生成 oracle 通过）**，最后 10 行 argmax 全同 |
 
-**结论要分开看**：布局门和 16-token ids 都过了，但**受控 A/B/A/B 没有预填充速度收益**（最好的一次仍慢约
-2%），而且 KL 的全 prompt 位置平均 0.0255 没过 0.006。设计里“长提示词 +30~45%”的预期在这条 4K/`--window 512`
-上没有出现。因此 `DS4_FAST_ATTN=1` 不仅是 opt-in，**目前也不建议在生产打开**：先定位 592 行的偏差，并在一份
-真正热的 A/B/A/B（10K/32K）上看到正收益，才值得继续。
+**结论要分开看**：布局门和 16-token ids 都过了；**4K 没有速度收益**；**10K 最好也只有约 +2.8%**（另一
+标量 294.7 s 离群值让中位数好看，但不是干净的 +30~45%）。KL 的全 prompt 位置平均 0.0255 仍没过 0.006。
+设计里的长提示词收益在这台机器上没有重现。因此 `DS4_FAST_ATTN=1` 仍是 opt-in，**目前不建议生产打开**：
+先定位 592 行的偏差；即使 10K 的 2.8% 是真的，也要先确认 32K 和数值可接受。
 
 **验证用的 binary 与 0006 的差别**：A/B/A/B 跑的是 `strata-exp` 树构建的 `build-mfma-exp/strata-dsv41`，即
 baseline + `expert-index-tp.patch` + 0006。它的 `T==1` decode 8-row prefetch（去掉
@@ -168,7 +175,7 @@ docker run --privileged --device /dev/kfd --device /dev/dri \
 ## 仍未验证 / 边界（不要当成"全部跑通"）
 
 - **本目录不含权重**：真机验证用的是机器上的 `/4T-02/dsv41-conv/pack7`；官方 2.00bpw 包为 138 GB + Engram 111 GB + DSpark 8 GB = 257 GB。
-- **整模型只跑过 4K + 17 token 提示**：`tools/dsv41/smoke.py`（要求输出 Paris）没有重跑；10K/32K、视觉和长上下文仍没在新补丁上验证。
+- **整模型只跑过 4K/10K + 17 token 提示**：`tools/dsv41/smoke.py`（要求输出 Paris）没有重跑；32K、视觉和长上下文仍没在新补丁上验证。
 - **显存/内存分层未在真实专家规模下测过**（64 GiB 显存放不下 288 GB 专家，实际靠 CPU 通道读）。
 - **`DS4_FAST_ATTN=1` 不建议生产打开**：不打 `0006` 时那条 WMMA 快速路径在 gfx928 上会走 `__builtin_trap()`
   （`ds4_wmma.cuh` 只对 gfx11/gfx12 有实现）；打了 `0006` 后 gfx928 走 MMAC，布局门和 16-token ids 都过了，
@@ -176,6 +183,6 @@ docker run --privileged --device /dev/kfd --device /dev/dri \
   速度收益**（最好的一次仍慢约 2%）。两个问题都解决前不要在生产打开。
 - **MMAC 与 MFMA 不是同一条指令**：gfx928 的矩阵核是 MMAC（DTK clang 17 拒绝 MFMA 并报 `needs target feature mai-insts`）；
   补丁按 MMAC 实现，CDNA 的分支仍保留 MFMA。
-- **速度没有收益**：4K、`--window 512` 的受控 A/B/A/B 中，标量 95.5/95.1 s，MMAC 97.3/114.6 s；10K/32K 和
-  生产默认 window 未测。
+- **速度只有 10K 的约 +2.8% 上限**：4K A/B/A/B 标量 95.5/95.1 s，MMAC 97.3/114.6 s（无收益）；10K A/B/A/B
+  标量 267.5/294.7 s，MMAC 260.1/266.1 s（最好 +2.8%）；32K 未测。这个量级不足以支撑默认开启。
 - **字节级可复现未验证**：`clean_rebuild_verified` 为 `false`；本目录只提供补丁与构建配方，不声明能重编出同一 SHA。

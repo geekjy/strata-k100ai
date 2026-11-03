@@ -27,6 +27,6 @@ llama.cpp side of the FP8 -> GGUF pipeline described in `../../README.md`.
 
 The opt-in matrix-core attention port is separate: apply
 `sources/dsv41-20261031-gfx928/patches/0006-mfma-attention.patch` **after step 2** if you want to test
-it. On gfx928 it uses **MMAC** (not MFMA); the layout gate and 16-token ids pass, but a controlled 4K
-A/B/A/B shows **no prefill gain** (best MMAC ~2 % slower) and the all-prompt KL is still open — keep
-`DS4_FAST_ATTN` unset in production. Details: `sources/dsv41-20261031-gfx928/README.md`.
+it. On gfx928 it uses **MMAC** (not MFMA); the layout gate and 4K/10K ids pass, but a controlled 4K
+A/B/A/B shows **no prefill gain** and 10K only about **+2.8 %**, and the all-prompt KL is still open —
+keep `DS4_FAST_ATTN` unset in production. Details: `sources/dsv41-20261031-gfx928/README.md`.

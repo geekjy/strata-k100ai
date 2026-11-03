@@ -71,7 +71,7 @@ docker run --privileged --device /dev/kfd --device /dev/dri \
 
 **当前边界**：本仓库不含权重；真机验证已在 pack7 上跑过 17-token 和 4K 提示（见下面的 matrix-core 条目），但 10K/32K、视觉 + 专家-TP、真实专家规模下的显存分层、全 prompt KL 门槛和字节级复现仍未完成。
 
-**一个坑 + 真机修正**：`DS4_FAST_ATTN=1` 在未打 `0006` 时走 WMMA 快速路径，gfx928 上会 `__builtin_trap()`（`ds4_wmma.cuh` 只实现 gfx11/gfx12），默认标量路径不受影响。2026-11-03 已在 K100_AI 上验证：gfx928 **没有 MFMA**（DTK clang 17 报 `needs target feature mai-insts`），矩阵核是 **MMAC**；补丁在 gfx928 走 MMAC、CDNA 走 MFMA。布局门 `matrix-core layout test: ALL OK`，4K 生成 16 个 token 两边完全一致；但**受控 A/B/A/B 没有预填充速度收益**（标量 95.5/95.1 s，MMAC 97.3/114.6 s，最好也慢约 2%），全 prompt 位置 KL 平均 0.0255 仍有保留（last-position 0.00131 通过）。所以生产**不要默认打开**：速度和全位置 KL 两个问题都还没解决。
+**一个坑 + 真机修正**：`DS4_FAST_ATTN=1` 在未打 `0006` 时走 WMMA 快速路径，gfx928 上会 `__builtin_trap()`（`ds4_wmma.cuh` 只实现 gfx11/gfx12），默认标量路径不受影响。2026-11-03 已在 K100_AI 上验证：gfx928 **没有 MFMA**（DTK clang 17 报 `needs target feature mai-insts`），矩阵核是 **MMAC**；补丁在 gfx928 走 MMAC、CDNA 走 MFMA。布局门 `matrix-core layout test: ALL OK`，4K 16-token ids 完全一致；但**4K A/B/A/B 没有预填充速度收益**，**10K 全量重编后最好也只有约 +2.8%**（标量 95.5/95.1 s vs MMAC 97.3/114.6 s；10K 267.5/294.7 s vs 260.1/266.1 s），全 prompt 位置 KL 平均 0.0255 仍有保留（last-position 0.00131 通过）。所以生产**不要默认打开**。
 
 ## GLM-5.3-Flash
 
