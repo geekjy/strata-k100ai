@@ -158,7 +158,7 @@
     "bytes": 35890,
     "status": "implemented and validated on K100_AI (gfx928, MMAC): layout gate ALL OK, ids identical; 4K A/B/A/B shows no prefill gain, 10K shows at best about +2.8%, and all-prompt-position KL is not under the 0.006 bar",
     "design": "../dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md",
-    "apply_order": "after the baseline (patches/0001..0005 or tools/patches-wip/baseline-gfx928-port.patch); on the production tree also after tools/patches-wip/expert-index-tp.patch, then this patch",
+    "apply_order": "clean v0.2.9 -> baseline (patches/0001..0005 or tools/patches-wip/baseline-gfx928-port.patch) -> patches/0002/0003/0004 -> tools/patches-wip/probes-base.patch -> tools/patches-wip/expert-index-tp.patch -> this patch. Use sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh for the one-command version.",
     "what": "gfx928's matrix core is MMAC, not MFMA: sparse_attn_wmma_kernel uses __builtin_amdgcn_mmac_f32_16x16x16f16 (C row = lane&15, col = (lane>>4)+4i); the CDNA parts keep MFMA. Two 16x16 tiles a wave, 32 keys a tile, 4 waves x 128 dims; gfx11/gfx12 WMMA unchanged; DS4_FAST_ATTN stays opt-in on gfx9",
     "files_after_patch": [
       {
@@ -201,12 +201,25 @@
       "what": "the MMAC branch's bookkeeping (C row=lane&15, col=(lane>>4)+4i; 4 waves, 32-key stage, 16 tiles with a partial last, online softmax, both products) against a plain attention reference",
       "result": "max abs 2.7e-4, mean 2.6e-5 on 500 keys (16 tiles, last partial)"
     },
+    "reproduce_clean_v029": {
+      "script": "reproduce-clean-v029.sh",
+      "input": "clean v0.2.9 tarball c62d5e3a15b40ea51c96aae9e8d36928965f53ab",
+      "order": ["baseline-gfx928-port.patch", "patches/0002-ds4-launch-probe.patch", "patches/0003-ds4-stage-markers.patch", "patches/0004-allreduce-rs2.patch", "tools/patches-wip/probes-base.patch", "tools/patches-wip/expert-index-tp.patch", "patches/0006-mfma-attention.patch"],
+      "probes_base": {
+        "path": "../dsv41-20261031-uncensored-fp8/tools/patches-wip/probes-base.patch",
+        "sha256": "e2ea7b807fb7ddbae94ea45c59a0bd0721469766991809e55b61845dff98b9bd",
+        "bytes": 19081,
+        "note": "the local probe base ds4_model.cu/ds4_kernels.cu/ds4_kernels.cuh that expert-index-tp.patch expects; without it the clean chain rejects one ds4_model.cu hunk"
+      },
+      "verified": "on the box: the produced tree is byte-identical to build-all (full diff -qr count 0); six key SHA-256s checked by the script",
+      "build": "reproduce-clean-v029.sh <v029.tar.gz> --build (docker image dcu-qwen3-5:perfect-0.0.1; LLAMA_DIR=/4T-02/strata-work/llama)"
+    },
     "validated_on_box": {
       "date": "2026-11-03",
       "device": "gfx928:sramecc+:xnack- (K100_AI)",
       "dtk": "26.04 / clang 17.0.0",
       "not_in_patch": "the validated binary came from strata-exp = baseline + expert-index-tp + 0006. Its earlier K100AI T==1 decode 8-row prefetch is part of expert-index-tp.patch, not 0006; it is decode-only, does not run on the T=512 prefill slab, and the MMAC device kernel is line-identical between the validated tree and 0006.",
-      "build_source": "the all-changes build (build-all) was made from strata-exp + 0006. A clean v029 + baseline + probe patches + expert-index-tp still rejects one ds4_model.cu hunk because expert-index-tp expects the local probe base; reproduce by copying the two working trees (tools/patches-wip/README.md).",
+      "build_source": "produced by sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh from clean v0.2.9 (c62d5e3a): baseline + patches/0002/0003/0004 + probes-base.patch + expert-index-tp.patch + 0006. The resulting tree was verified byte-identical to build-all (full diff -qr count 0) and six key files match the recorded SHA-256s.",
       "instruction_discovery": "the DTK clang rejects __builtin_amdgcn_mfma_f32_16x16x16f16 on gfx928 ('needs target feature mai-insts'); gfx928 has __builtin_amdgcn_mmac_f32_16x16x16f16 and V_MMAC_F32_16X16X16_F16 (/opt/dtk/include/du_mma.hpp gives the lane map). A raw one-step probe matched the CPU product with 0 mismatches; random-value precision was 1.75e-7 (one step) / 2.05e-6 (16 steps) max absolute vs FP64.",
       "layout_test": "matrix-core layout test: ALL OK (one step + mma_scores + mma_pv, 0 mismatches each)",
       "prefill_ab": {

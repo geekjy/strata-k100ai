@@ -1,0 +1,348 @@
+--- a/src/dsv41/ds4_kernels.cu
++++ b/src/dsv41/ds4_kernels.cu
+@@ -4,7 +4,7 @@
+ // angles, the softmaxes and the roundings follow the reference's F32 arithmetic.  A window's token is blockIdx.y.
+ #include "ds4_launch.h"   // strata_ds4_launch: <<<>>> on CUDA and HIP, a dispatch on Metal
+ #include "ds4_kernels.cuh"
+-#include <thread>      // K100AI markers: the host watchdog thread
++#include <thread>      // K100AI markers
+ #include <chrono>
+ #include <cstdio>
+ #include <cstring>
+@@ -1591,10 +1591,12 @@
+                                                             float route_scale, const unsigned long long* __restrict__ vram,
+                                                             const float* __restrict__ x, int dim, int* idx, float* w,
+                                                             unsigned long long* plan_ptr, Req* req,
+-                                                            const float* __restrict__ bias_vl, unsigned vl, int req_x_on, int* mk) {
++                                                            const float* __restrict__ bias_vl, unsigned vl, int req_x_on, int* mk, int dbg_inv) {
+     // K100AI markers: host-visible progress, so a fault that kills the process still says how far it got
+     auto mark = [&](int slot, int v) {
+-        if (mk != nullptr && threadIdx.x == 0) { mk[slot] = v; __threadfence_system(); }
++        // K100AI: (invocation << 16) | value, so a slot says WHICH call wrote it - a constant is otherwise
++        // indistinguishable from the previous call's leftover.
++        if (mk != nullptr && threadIdx.x == 0) { mk[slot] = (dbg_inv << 16) | (v & 0xFFFF); __threadfence_system(); }
+     };
+     __shared__ float sc[1024], bs[1024];
+     __shared__ float bv[32];
+@@ -1603,25 +1605,31 @@
+     __shared__ int on_cpu;
+     const int t = blockIdx.x;
+     mark(0, 1);                       // entered
+-    if (mk != nullptr && threadIdx.x == 0) mk[14] += 1;   // how many invocations started
++    mark(16, dbg_inv);                // which invocation is running
++    if (mk != nullptr && threadIdx.x == 0) mk[14] += 1;   // invocations started
+     logits += (size_t) t * 1024;
+     if (bias_vl != nullptr && ((vl >> t) & 1u)) bias = bias_vl;
+     for (int i = threadIdx.x; i < n; i += blockDim.x) {
+         const float l = logits[i];
++        if (mk != nullptr) mk[32 + threadIdx.x] = (dbg_inv << 16) | (i + 1);   // this thread's logit read came back
+         const float sp = l > 20.0f ? l : log1pf(expf(l));
+         sc[i] = sqrtf(sp);
+         bs[i] = sc[i] + bias[i];
++        if (mk != nullptr) mk[544 + threadIdx.x] = (dbg_inv << 16) | (i + 1);  // ... and its bias read
+     }
+-    mark(1, 1);                       // logits/bias preload done
++    mark(1, 1);                       // preload done
++    if (mk != nullptr) mk[17] = dbg_inv;   // about to hit the barrier
+     __syncthreads();
++    if (mk != nullptr) mk[18] = dbg_inv;   // barrier returned
+     mark(2, 1);                       // after the barrier
+     const int lane = threadIdx.x & 31, wp = threadIdx.x >> 5;
+     for (int r = 0; r < k; ++r) {
++        if (mk != nullptr && threadIdx.x == 0) mk[19] = dbg_inv;   // the top-k's local scan starts
+         float best = -FLT_MAX;
+         int bix = 0x7fffffff;
+         for (int i = threadIdx.x; i < n; i += blockDim.x)
+             if (bs[i] > best || (bs[i] == best && i < bix)) best = bs[i], bix = i;
+-        mark(3, r + 1);               // top-k round r: local scan done
++        mark(3, r + 1);               // top-k round r
+         for (int o = 16; o > 0; o >>= 1) {
+             const float ov = __shfl_xor_sync(0xffffffffu, best, o);
+             const int oi = __shfl_xor_sync(0xffffffffu, bix, o);
+@@ -1634,10 +1642,10 @@
+             int ix = 0x7fffffff;
+             for (int q = 0; q < (int) (blockDim.x >> 5); ++q)
+                 if (bv[q] > b || (bv[q] == b && bi[q] < ix)) b = bv[q], ix = bi[q];
+-            mark(4, r + 1);           // inside the winner block
++            mark(4, r + 1);
+             pick[r] = ix;
+             bs[ix] = -FLT_MAX;
+-            mark(5, r + 1);           // winner written
++            mark(5, r + 1);
+         }
+         __syncthreads();
+     }
+@@ -1645,32 +1653,37 @@
+     if (threadIdx.x == 0) {
+         float s = 0.0f;
+         for (int r = 0; r < k; ++r) s += sc[pick[r]];
+-        mark(7, 1);                   // weights' denominator
++        mark(7, 1);
+         int cpu = 0;
+         for (int r = 0; r < k; ++r) {
+             const float wv = sc[pick[r]] / (s + 1e-20f) * route_scale;
+             mark(8, r + 1);           // before this pick's writes
++            if (mk != nullptr && threadIdx.x == 0) {   // K100AI: is the table there, and is this index sane?
++                mk[20] = (dbg_inv << 16) | (vram != nullptr ? 1 : 0);
++                mk[21] = (dbg_inv << 16) | (pick[r] & 0xFFFF);
++                mk[22] = (dbg_inv << 16) | ((pick[r] >= 0 && pick[r] < n) ? 1 : 0);
++            }
+             idx[(size_t) t * kPicks + r] = pick[r];
+             w[(size_t) t * kPicks + r] = wv;
+             plan_ptr[(size_t) t * kPicks + r] = vram[pick[r]];
+-            mark(9, r + 1);           // idx/w/plan_ptr written for this pick
++            mark(9, r + 1);
+             cpu |= vram[pick[r]] == 0ull;
+             if (req != nullptr) {
+                 req->ids[t][r] = pick[r];
+                 req->w[t][r] = wv;
+             }
+         }
+-        mark(10, 1);              // req->ids / req->w written
++        mark(10, 1);
+         on_cpu = cpu;
+-        mark(11, 1);              // on_cpu set
++        mark(11, 1);
+     }
+     // the token's FFN input to the host only where the CPU lane reads it (a pick of its on the CPU lane): each row
+     // 20 KB over PCIe, where most windows have none
+     __syncthreads();
+-    mark(12, 1);                      // after the last barrier
++    mark(12, 1);
+     if (req != nullptr && on_cpu && req_x_on)
+         for (int i = threadIdx.x; i < dim; i += blockDim.x) req->x[t][i] = x[(size_t) t * dim + i];
+-    if (mk != nullptr && threadIdx.x == 0) mk[15] += 1;   // how many invocations finished
++    if (mk != nullptr && threadIdx.x == 0) mk[15] += 1;   // invocations finished
+ }
+ 
+ // a later layer's m likely picks (route_kernel's choice from its logits) into req->ahead[t][off ..)
+@@ -1793,6 +1806,38 @@
+ // range is up it sums chunk mi of the range in member order (ar_sum_kernel's sums, bit for bit), puts that out and
+ // flags it; once every member's sum flag is up it reads the other chunks' sums.  Each member reads about two rows over
+ // PCIe whatever nm is, where every member reading every other row grows with nm
++// K100AI: 2 members, one round-trip.  Each member publishes its partial once, waits for the peer's flag once,
++// then sums every member's row (its own read back from global too) in member order - so both members compute
++// bit-identical sums, where the reduce-scatter below needs a second publish/wait round for its all-gather.
++__global__ void __launch_bounds__(kThreads) ar_rep_kernel(float* x, int n4, float* rows, size_t stride,
++                                                          unsigned* bflags, int nm, int mi, int slot, int slots,
++                                                          unsigned seq) {
++    float4* x4 = (float4*) x;
++    auto rflag = [&](int m) { return bflags + (((size_t) m * slots + slot) * kArBlocks + blockIdx.x) * 8; };
++    auto row = [&](int m) { return (float4*) (rows + ((size_t) m * slots + slot) * stride); };
++    const int per = (n4 + (int) gridDim.x - 1) / (int) gridDim.x;
++    const int lo = blockIdx.x * per, hi = min(n4, lo + per);
++    if (lo < hi) {
++        float4* mine = row(mi);
++        for (int q = lo + threadIdx.x; q < hi; q += blockDim.x) mine[q] = x4[q];
++    }
++    __threadfence_system();
++    __syncthreads();
++    if (threadIdx.x == 0) *(volatile unsigned*) rflag(mi) = seq;
++    if ((int) threadIdx.x < nm && (int) threadIdx.x != mi) wait_at_least(rflag(threadIdx.x), seq);
++    __syncthreads();
++    for (int q = lo + threadIdx.x; q < hi; q += blockDim.x) {
++        float4 v = ld_fresh(row(0) + q);
++        for (int m = 1; m < nm; ++m) {
++            const float4 p = ld_fresh(row(m) + q);
++            v.x = __fadd_rn(v.x, p.x);
++            v.y = __fadd_rn(v.y, p.y);
++            v.z = __fadd_rn(v.z, p.z);
++            v.w = __fadd_rn(v.w, p.w);
++        }
++        x4[q] = v;
++    }
++}
+ __global__ void __launch_bounds__(kThreads) ar_rs_kernel(float* x, int n4, float* rows, float* sums, size_t stride,
+                                                         unsigned* bflags, int nm, int mi, int slot, int slots,
+                                                         unsigned seq) {
+@@ -2135,10 +2180,39 @@
+ }
+ }  // namespace
+ 
++static constexpr int kRouteThreads = 512;   // K100AI: back to the upstream launch size
++namespace {
++// K100AI markers: progress + this launch's arguments, in host-mapped memory, copied to disk every 2 ms.
++struct DbgBuf { int* mk; unsigned long long* slot; };
++DbgBuf& dbg_buf() {
++    static DbgBuf b = [] {
++        DbgBuf r{nullptr, nullptr};
++        if (std::getenv("DS4_MARKERS") == nullptr) return r;
++        void* p = nullptr;
++        if (cudaHostAlloc(&p, 8192, cudaHostAllocMapped | cudaHostAllocPortable) == cudaSuccess) { std::memset(p, 0, 8192); r.mk = (int*) p; }
++        if (cudaHostAlloc(&p, 1024, cudaHostAllocMapped | cudaHostAllocPortable) == cudaSuccess) { std::memset(p, 0, 1024); r.slot = (unsigned long long*) p; }
++        if (r.mk != nullptr) {
++            std::thread([r] {
++                for (;;) {
++                    std::FILE* f = std::fopen("/4T-02/strata-work/ds4_markers.bin", "wb");
++                    if (f != nullptr) {
++                        std::fwrite(r.mk, 4, 1200, f);
++                        if (r.slot != nullptr) std::fwrite(r.slot, 8, 128, f);
++                        std::fclose(f);
++                    }
++                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
++                }
++            }).detach();
++        }
++        return r;
++    }();
++    return b;
++}
++}  // namespace
+ void route_publish(const float* logits, const float* bias, int n, int k, int T, float route_scale,
+                    const unsigned long long* vram, const float* x, int dim, int* idx, float* w,
+                    unsigned long long* plan_ptr, Req* req, unsigned seq, cudaStream_t s, const float* bias_vl,
+-                   unsigned vl, int na0, int na1) {
++                   unsigned vl, int na0, int na1, int dbg_layer) {
+ #if defined(STRATA_METAL)
+     // selection only: the prefetch schedule (req) is published by the CUDA kernel, and is turned on separately here
+     if (strata::dsv41::metal_host::route_publish(logits, bias, n, k, T, route_scale, vram, idx, w, plan_ptr,
+@@ -2149,25 +2223,21 @@
+     }
+ #endif
+     static const int req_x_on = std::getenv("DS4_NO_REQ_X") == nullptr;   // K100AI probe
+-    // K100AI markers: a mapped host buffer the kernel writes progress into, and a thread that keeps a copy
+-    // on disk every 2 ms - the process dies with a VM fault, the file does not.
+-    static int* mk = []() -> int* {
+-        if (std::getenv("DS4_MARKERS") == nullptr) return nullptr;
+-        void* p = nullptr;
+-        if (cudaHostAlloc(&p, 4096, cudaHostAllocMapped | cudaHostAllocPortable) != cudaSuccess) return nullptr;
+-        std::memset(p, 0, 4096);
+-        int* q = (int*) p;
+-        std::thread([q] {
+-            for (;;) {
+-                std::FILE* f = std::fopen("/4T-02/strata-work/ds4_markers.bin", "wb");
+-                if (f != nullptr) { std::fwrite(q, 4, 64, f); std::fclose(f); }
+-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+-            }
+-        }).detach();
+-        return q;
+-    }();
+-    strata_ds4_launch(route_publish_kernel, T, 512, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
+-                                           vl != 0 ? bias_vl : nullptr, vl, req_x_on, mk);
++    static int* mk = dbg_buf().mk;
++    static int dbg_launch = 0;
++    ++dbg_launch;
++    if (auto* sl = dbg_buf().slot) {   // K100AI: which layer and pointers this launch got
++        sl[0] = (unsigned long long) dbg_layer;
++        sl[1] = (unsigned long long) (uintptr_t) logits;
++        sl[2] = (unsigned long long) (uintptr_t) bias;
++        sl[3] = (unsigned long long) dbg_launch;
++        if (dbg_layer >= 0 && dbg_layer < 40) {
++            sl[8 + dbg_layer] = (unsigned long long) (uintptr_t) logits;
++            sl[48 + dbg_layer] = (unsigned long long) (uintptr_t) bias;
++        }
++    }
++    strata_ds4_launch(route_publish_kernel, T, kRouteThreads, 0, s, logits, bias, n, k, route_scale, vram, x, dim, idx, w, plan_ptr, req,
++                                           vl != 0 ? bias_vl : nullptr, vl, req_x_on, mk, dbg_launch);
+     if (req != nullptr) strata_ds4_launch(publish_kernel, 1, 1, 0, s, req, T, seq, na0, na1);
+ }
+ void route_ahead(const float* logits, const float* bias, int n, int m, int T, Req* req, int off, cudaStream_t s) {
+@@ -2703,6 +2773,21 @@
+         const char* e = std::getenv("DS4_AR_RS2");
+         return e != nullptr && std::atoi(e) != 0;
+     }();
++    static const bool rep = [] {
++        const char* e = std::getenv("DS4_AR_REP");
++        return e != nullptr && std::atoi(e) != 0;
++    }();
++    static const bool off = [] {   // K100AI: measurement only - the members then keep their own partial
++        const char* e = std::getenv("DS4_AR_OFF");
++        return e != nullptr && std::atoi(e) != 0;
++    }();
++    if (off) return;
++    if (rep && a.nm == 2 && a.bflags != nullptr) {   // K100AI: one round-trip instead of two
++        const int n4 = n / 4;
++        const int blocks = std::max(1, std::min(kArBlocks, cdiv(n4, kThreads)));
++        strata_ds4_launch(ar_rep_kernel, blocks, kThreads, 0, s, x, n4, a.data, a.stride, a.bflags, a.nm, mi, slot, a.slots, seq);
++        return;
++    }
+     if ((a.nm > 2 || (a.nm == 2 && rs2)) && a.sums != nullptr && a.bflags != nullptr) {   // (the reduce-scatter: ar_rs_kernel)
+         static const bool f16 = [] {
+             const char* e = std::getenv("DS4_AR_F16");
+--- a/src/dsv41/ds4_kernels.cuh
++++ b/src/dsv41/ds4_kernels.cuh
+@@ -238,7 +238,7 @@
+ void route_publish(const float* logits, const float* bias, int n, int k, int T, float route_scale,
+                    const unsigned long long* vram, const float* x, int dim, int* idx, float* w,
+                    unsigned long long* plan_ptr, Req* req, unsigned seq, cudaStream_t s, const float* bias_vl = nullptr,
+-                   unsigned vl = 0, int na0 = 0, int na1 = 0);
++                   unsigned vl = 0, int na0 = 0, int na1 = 0, int dbg_layer = 0);
+ /// Lookahead: the m picks a later layer will likely make (its gate's logits on this layer's FFN input, the routing's
+ /// score + bias, the m best of n) into req->ahead[t][off ..) for the T tokens - before route_publish, which publishes them.
+ void route_ahead(const float* logits, const float* bias, int n, int m, int T, Req* req, int off, cudaStream_t s);
+--- a/src/dsv41/ds4_model.cu
++++ b/src/dsv41/ds4_model.cu
+@@ -12,7 +12,7 @@
+ //   moe(x): 6 of 384 routed experts (sqrt-softplus scores, biased top-k) + the shared expert
+ //   h = post * moe + comb^T h;  pre = f_pre
+ // and after the last layer logits = head(rmsnorm(sum_s pre[s] h[s])).
+-// K100AI (gfx928): the wave64/compat backend exposes the hipMemcpy2D spellings, not the CUDA ones.
++// K100AI: the wave64/compat backend exposes the hipMemcpy2D spellings, not the CUDA ones.
+ #if defined(STRATA_USE_HIP)
+ #define strata_memcpy2d hipMemcpy2D
+ #define strata_memcpy2d_async hipMemcpy2DAsync
+@@ -79,6 +79,10 @@
+ #endif
+ 
+ namespace strata::ds4 {
++// K100AI-PROBE: the head's own cost (events around its matvec), reported at the token's final sync
++static cudaEvent_t g_hev0 = nullptr, g_hev1 = nullptr;
++static double g_head_ms_sum = 0.0;
++static long long g_head_ms_n = 0;
+ namespace x3 = strata::dsv41k::exl3;
+ namespace kc = strata::dsv41k::cpu;
+ namespace gf = strata::dsv41k::glmf;
+@@ -9432,6 +9436,24 @@
+         const double th = now_ms();
+         CK(cudaStreamSynchronize(d.st));
+         st.head_ms += now_ms() - th;
++        if (g_hev1 != nullptr) {   // K100AI-PROBE: the head's share of the wait
++            float hms = 0.0f;
++            if (cudaEventElapsedTime(&hms, g_hev0, g_hev1) == cudaSuccess) {
++                g_head_ms_sum += hms;
++                if (++g_head_ms_n % 8 == 0)
++                    std::fprintf(stderr, "K100AI-PROBE head kernel %.2f ms/token (avg of %lld)\n",
++                                 g_head_ms_sum / (double) g_head_ms_n, g_head_ms_n);
++            }
++        }
++        if (g_hev1 != nullptr) {   // K100AI-PROBE: the head's share of the wait
++            float hms = 0.0f;
++            if (cudaEventElapsedTime(&hms, g_hev0, g_hev1) == cudaSuccess) {
++                g_head_ms_sum += hms;
++                if (++g_head_ms_n % 8 == 0)
++                    std::fprintf(stderr, "K100AI-PROBE head kernel %.2f ms/token (avg of %lld)\n",
++                                 g_head_ms_sum / (double) g_head_ms_n, g_head_ms_n);
++            }
++        }
+         if (prof_chunk) {   // DS4_PROF: the run's GPU time by stage, every device's summed
+             for (Dev& dv : devs) {
+                 cudaSetDevice(dv.id);
+@@ -9638,9 +9660,19 @@
+ #endif
+                                                                                    )
+                                         : std::max(1, x3::mv_cols(d.head));
++        if (g_hev0 == nullptr) { cudaEventCreate(&g_hev0); cudaEventCreate(&g_hev1); }   // K100AI-PROBE
++        cudaEventRecord(g_hev0, d.st);
+         for (int c = 0; c < rows; c += per)
+             if (!mv(d, {job(d.head, xn + (size_t) c * D, out + (size_t) c * ld, std::min(per, rows - c), D, ld)}, err))
+                 return false;
++        cudaEventRecord(g_hev1, d.st);
++        if (std::getenv("DS4_HEAD_TIME") != nullptr) {   // K100AI-PROBE (perturbs: syncs after the head)
++            if (cudaEventSynchronize(g_hev1) == cudaSuccess) {
++                float hms = 0.0f;
++                cudaEventElapsedTime(&hms, g_hev0, g_hev1);
++                std::fprintf(stderr, "K100AI-PROBE head %.2f ms\n", hms);
++            }
++        }
+         if (nm == 1 || !gather) return true;
+         const unsigned seq = ++d.head_seq;
+         const int slot = (int) (seq % 2);
+@@ -10327,7 +10359,7 @@
+             }
+             route_publish(d.glog, l.gate_bias, l.n_exp, l.k_exp, T, g.route_scale, l.vram_tab, d.x, D, d.ridx, d.rw,
+                           d.plan_ptr, lead ? reqs + slot : nullptr, sq, s, l.gate_bias_vl, l.mtp ? 0u : wp.vl, na[0],
+-                          na[1]);
++                          na[1], l.il);
+             if (!mv(d, {job(l.s1, d.x, d.sg, T, D, FF), job(l.s3, d.x, d.su, T, D, FF)}, err)) return false;
+             swiglu(d.sg, d.su, T * FF, g.lim, d.sh, s);
+             if (!mv(d, {job(l.s2, d.sh, d.sh_out, T, FF, D)}, err)) return false;

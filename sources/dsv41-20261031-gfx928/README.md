@@ -107,18 +107,29 @@ gfx9 上 `DS4_FAST_ATTN` 未设置时仍走标量内核。
 
 1. **基线**：`patches/0001`→`0005`，或直接用组合版
    [`../dsv41-20261031-uncensored-fp8/tools/patches-wip/baseline-gfx928-port.patch`](../dsv41-20261031-uncensored-fp8/tools/patches-wip/baseline-gfx928-port.patch)；
-2. **生产树**：再叠
-   [`../dsv41-20261031-uncensored-fp8/tools/patches-wip/expert-index-tp.patch`](../dsv41-20261031-uncensored-fp8/tools/patches-wip/expert-index-tp.patch)
+2. **probe 基树**：`../dsv41-20261031-uncensored-fp8/patches/0002-ds4-launch-probe.patch`、
+   `0003-ds4-stage-markers.patch`、`0004-allreduce-rs2.patch`，再加
+   [`probes-base.patch`](../dsv41-20261031-uncensored-fp8/tools/patches-wip/probes-base.patch)；
+3. **生产树**：再叠
+   [`expert-index-tp.patch`](../dsv41-20261031-uncensored-fp8/tools/patches-wip/expert-index-tp.patch)
    （含 `T==1` decode prefetch 等）；
-3. 最后 `0006`。
+4. 最后 `0006`。
+
+**干净 v029 一键复现**：
+
+```bash
+sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh /path/to/v029.tar.gz          # 生成并校验
+sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh /path/to/v029.tar.gz --build   # 再构建
+```
+
+脚本按上面顺序应用并校验六个关键 SHA。已在机器上验证：生成树与实测的 `build-all` **完全一致**
+（`diff -qr` 0）。`probes-base.patch` 就是之前缺的本地 probe 基树——`expert-index-tp.patch` 依赖它，
+补上后干净 v029 不再有 reject。
 
 0006 只改四个文件（新 `src/dsv41/ds4_mfma.cuh`、`ds4_kernels.cu`、新 `tests/dsv41/mfma_layout_test.cpp`、
 `CMakeLists.txt`），并新增 `ds4_mfma_test` 目标（`CMAKE_HIP_ARCHITECTURES` 里有矩阵核架构时才生成）。
 
-**全量重编的实测树**用的是现成 `strata-exp` + 0006（`build-all`）。把 `baseline-gfx928-port.patch` +
-`patches/0002/0003/0004` + `expert-index-tp.patch` 叠到干净 v029 时，`expert` 在 `ds4_model.cu` 还有一个
-hunk 拒绝（它的基树还带本地 probe 改动）；干净复现请按 `tools/patches-wip/README.md` 的“直接拷贝两棵
-工作树”路线，或先把 probe 基树补齐。
+**全量重编**用的就是这个一键脚本产出的树（`strata-exp` + 0006 的等价物，`build-all`）。
 
 **实测（2026-11-03，K100_AI / gfx928）**
 
