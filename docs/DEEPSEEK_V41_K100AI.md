@@ -1,4 +1,4 @@
-# DeepSeek-V4.1-Flash 与 GLM-5.3-Flash 在 K100AI 上的现状
+﻿# DeepSeek-V4.1-Flash 与 GLM-5.3-Flash 在 K100AI 上的现状
 
 日期：2026-10-31
 机器：单卡 / 双卡海光 K100_AI（gfx928、wave64），DTK 26.04 / clang 17
@@ -94,3 +94,10 @@ docker run --privileged --device /dev/kfd --device /dev/dri \
 3. **权重格式不对**：本地是 bf16 safetensors，strata 吃 GGUF + native pack；llama.cpp 目前也没有 `glm5_next` 的转换器。
 
 但它的结构是"Qwen3.8 的线性注意力 + DeepSeek V4.1 的稀疏注意力 + 超连接"的混合体，而这三块 strata 都有实现（`gdn` / `qsa` / `hc`）。所以现实路线是**以 `strata-dsv41` 为骨架新增 `Glm5Next` 族**，而不是从零写引擎——周期按周计，且强依赖 DeepSeek 路径先在 gfx928 上整模型可信。
+
+## 延伸阅读（2026-11-03）
+
+- [operations.md](../sources/dsv41-20261031-uncensored-fp8/docs/operations.md)：生产运维手册（启停、回退、监控、开关清单、已付代价的故障模式）。
+- [deploy-new-machine.md](../sources/dsv41-20261031-uncensored-fp8/docs/deploy-new-machine.md)：在第二台机器上部署与编译（镜像/模型/源码的搬运清单与验收标准）。
+- [mfma-attention-port.md](../sources/dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md)：把矩阵核心注意力移植到 gfx928（MFMA）的设计，预计预填充 +30~45%。
+- [sources/dsv41-20261031-uncensored-fp8/ops/](../sources/dsv41-20261031-uncensored-fp8/ops/)：生产启动脚本、serve 配置与测试用 ids。

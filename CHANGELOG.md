@@ -1,5 +1,16 @@
-# 更新记录
+﻿# 更新记录
 
+## 2026-11-03 专家序号张量并行：修好长提示词崩溃并上生产（main，未打新标签）
+
+- **修好了**：sources/dsv41-20261031-uncensored-fp8/ 的专家-TP 在超过 ~2048 token 的提示词上必崩（KERNEL VMFault）。根因不是专家内核，而是**临时缓冲区宽度**：--tp 2 下 split128(g.ff, nm, ...) 把 FFN 宽度算成**半宽 1152**，而专家-TP 让每个成员算**完整专家**、lead 算**完整共享专家**（2304 宽）→ c.sg/c.su/c.sh16/c.h16 在 T > C/2 = 2048 时被写穿。修复：expert_tp_on() 下这四个缓冲区按 g.ff 分配。
+- **怎么找到的**：把复现从 15 分钟压到 13 秒（走 API 服务而非每次加载模型）→ hipgdb 显示真正出错的是 **rocBLAS/Tensile GEMM**（Cijk_...）而不是专家内核 → 打印 GEMM 维度与缓冲区地址，故障地址正好在 c.sg 末端外 240 KB。
+- **量化不是原因**：用 pack4（原始 MXFP4 专家）与 pack7（自量化 IQ2_XXS）对照，两者同样崩，排除量化数据。
+- **实测**：2210 token 116 tok/s、4080 token 170 tok/s、**10200 token 183 tok/s**（基线 134），解码约 22.5（DSpark 关）/ 24–27（开）；API 侧 12 个混合请求（638–9999 token）全部成功，引擎零重启。
+- **生产已切换**：serve_pack7_tp.sh + dsv41-serve-p7tp.json（DS4_EXPERT_TP=1 DS4_AR_RS2=1 DS4_ATTN_SPLIT=1，pack7 + DSpark，--restart unless-stopped）；回退仍是 serve_pack7.sh。
+- **性能**：DS4_ATTN_SPLIT=1 在 A/B 对比里让解码 23.39 → 25.21 tok/s（+7.8%），attention 50.78 → 43.34 ms。实测并否决：--prefill-chunk 8192（预填充更慢）、DS4_FAT_ROWS=64（无收益）、缩小 max-context（KV 太小，显存专家只从 5803 变 5809）。All-reduce 也不是瓶颈（每 token 仅 3.17 ms）。
+- **DS4_FAST_ATTN 在 gfx928 上会崩**：ds4_wmma.cuh 只有 gfx11/gfx12 分支，其余走 __builtin_trap()，看起来像 VMFault。移植 MFMA 的设计写在 docs/mfma-attention-port.md（预计预填充 +30~45%，3–5 个工作日）。
+- **新增文档**：[operations.md](sources/dsv41-20261031-uncensored-fp8/docs/operations.md)（运维手册）、[deploy-new-machine.md](sources/dsv41-20261031-uncensored-fp8/docs/deploy-new-machine.md)（第二台机器部署）、[mfma-attention-port.md](sources/dsv41-20261031-uncensored-fp8/docs/mfma-attention-port.md)（优化设计），以及 sources/dsv41-20261031-uncensored-fp8/ops/（生产脚本与测试用 ids）。
+- **边界**：>10k token 未验证；视觉 + 专家-TP 未测；解码 24–27 tok/s 与预填充 138–183 tok/s 是当前架构（2 卡 + 每层跨卡同步）的实际上限。
 ## 2026-10-31 FP8 权重转 GGUF 并打包：装载成功，首次前向在 gfx928 上越界（main，未打新标签）
 
 - 新增 [sources/dsv41-20261031-uncensored-fp8](sources/dsv41-20261031-uncensored-fp8/)：把一份 **FP8 块量化（e4m3 + 32×32 ue8m0）+ FP4 专家**的 DeepSeek-V4.1-Flash 社区微调（476 GB，48 个 safetensors，Engram/DSpark/视觉塔都在权重里）转成 `strata-dsv41` 能读的 GGUF 与 native pack 的完整流水线、补丁与实测数据。
