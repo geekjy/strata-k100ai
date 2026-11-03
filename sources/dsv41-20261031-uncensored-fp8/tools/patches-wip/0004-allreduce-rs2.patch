@@ -1,0 +1,18 @@
+--- a/src/dsv41/ds4_kernels.cu
++++ b/src/dsv41/ds4_kernels.cu
+@@ -2655,7 +2655,14 @@
+ }
+ void allreduce(float* x, int n, const ArGroup& a, int mi, unsigned seq, unsigned* cnt, cudaStream_t s) {
+     const int slot = (int) (seq % (unsigned) a.slots);
+-    if (a.nm > 2 && a.sums != nullptr && a.bflags != nullptr) {   // (the reduce-scatter: ar_rs_kernel)
++    // K100AI: the reduce-scatter below is generic in nm (it slices by nm and waits on threadIdx.x < nm), but
++    // the gate only let 3+ members use it, so 2 GPUs paid the slower put + poll + sum path: ~2.5 ms a call,
++    // twice a layer.  DS4_AR_RS2=1 opts 2 members into the reduce-scatter; the default path is unchanged.
++    static const bool rs2 = [] {
++        const char* e = std::getenv("DS4_AR_RS2");
++        return e != nullptr && std::atoi(e) != 0;
++    }();
++    if ((a.nm > 2 || (a.nm == 2 && rs2)) && a.sums != nullptr && a.bflags != nullptr) {   // (the reduce-scatter: ar_rs_kernel)
+         static const bool f16 = [] {
+             const char* e = std::getenv("DS4_AR_F16");
+             return e != nullptr && std::atoi(e) != 0;   // opt-in: no gain measured on 4x R9700 (21.8 vs 21.9 tok/s)   // (on unless DS4_AR_F16=0)

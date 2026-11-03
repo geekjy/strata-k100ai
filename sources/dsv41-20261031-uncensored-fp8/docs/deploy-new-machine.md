@@ -1,4 +1,4 @@
-# Bringing this deployment up on another machine
+﻿# Bringing this deployment up on another machine
 
 Two routes: **copy the working set** (fast, exact, ~360 GB to move) or **rebuild from sources**
 (small transfer, needs the matching upstream). Both end with the same command line.
@@ -78,15 +78,15 @@ in `sources/dsv41-20261031-uncensored-fp8/` were made against the upstream tree 
 
 | patch | what it does |
 |---|---|
-| `/4T-02/strata-work/k100ai-dsv41-gfx928.patch` (18 KB) | upstream -> the **baseline** tree (the gfx928 port) |
-| `/4T-02/strata-work/exptp-wip.patch` (56 KB) | baseline -> the **expert-TP** tree |
+| `tools/patches-wip/baseline-gfx928-port.patch` (18 KB) | upstream -> the **baseline** tree (the gfx928 port) |
+| `tools/patches-wip/expert-index-tp.patch` (56 KB) | baseline -> the **expert-TP** tree |
 
 ```bash
 git clone https://github.com/Niko1221/Strata upstream        # pick the release closest to 2026-10-31
 cd upstream && git checkout <that release>
-patch -p1 < k100ai-dsv41-gfx928.patch                        # -> baseline
+patch -p1 < tools/patches-wip/baseline-gfx928-port.patch     # -> baseline
 cp -a . ../strata-exp && cd ../strata-exp
-patch -p1 < exptp-wip.patch                                  # -> expert-TP
+patch -p1 < tools/patches-wip/expert-index-tp.patch          # -> expert-TP
 ```
 
 If either patch does not apply cleanly, stop and use route A — the trees are only 98 MB each and
