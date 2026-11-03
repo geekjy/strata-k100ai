@@ -1,5 +1,17 @@
 # 更新记录
 
+## 2026-11-04 生产回到 pack7 + DS4_DSPARK_MAX=7，decode 45.6–46.0 tok/s
+
+- 按用户要求把 `dsv41-serve` 从 pack8 切回 **pack7（IQ2_XXS 专家）**，并加
+  `DS4_DSPARK_MAX=7`；`DS4_FAST_ATTN=1`、expert-TP、DSpark 保持。
+- 256-token 基准（45-token prompt，DSpark on）：**45.6 / 45.7 / 45.9 / 46.0 / 45.9 tok/s**，
+  drafts 205、accepted 190；prompt ~24–25 tok/s。之前同一服务的 max7 冷启动样本约 35。
+- 参数 sweep（同一基准，3 次中位数）：max7 单独 **45.5**；`STRATA_DS4_DSPARK_CUM=0.5` 43.3；
+  `=0.7` ~38.5；`DS4_DSPARK_MAX=5` ~32.3；`=8` ~38.7；`DS4_DSPARK_SAMPLE=1` ~31.5；
+  `STRATA_MMVQ_WV2_GROUP/LDS` ~34.4。**没有别的参数超过 max7 单独**。
+- 当前生产脚本 `serve_pack7_tp.sh` 已写入 `DS4_DSPARK_MAX=7`；config 为 pack7。
+  pack8/IQ1_S 和 pack4 留在磁盘作为回滚。
+
 ## 2026-11-03 生产切到 IQ1_S 专家量化（pack8，23:57）
 
 - 新增 IQ1_S 专家量化：`DSV41-UNC-v3-iq1s.gguf`，325.8 GB；专家 **106.2 GB / 1.56 bpw**，

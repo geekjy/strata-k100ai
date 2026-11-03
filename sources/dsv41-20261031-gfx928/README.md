@@ -153,7 +153,9 @@ sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh /path/to/v029.tar.gz --bui
 （clean `repro-build` + MMAC），健康检查和一次真实请求通过；21:58 切到原生 MXFP4/FP8 pack4
 （`DSV41-UNC-v3.gguf`，508 GB）；23:57 再切到 **IQ1_S 专家量化 pack8**
 （`DSV41-UNC-v3-iq1s.gguf`，325.8 GB；专家 106.2 GB/1.56 bpw，全部进 VRAM，加载后约 146 GB RAM，
-质量低于 pack4）。每次 health 200、真实请求通过。上面的“不建议默认打开”结论不变，回滚方式见
+质量低于 pack4）；2026-11-04 02:33 回到 **pack7（IQ2_XXS）+ `DS4_DSPARK_MAX=7`**，256-token
+基准 decode **45.6–46.0 tok/s**（drafts 205/accepted 190），裸 max7 冷启动约 35。每次 health 200、
+真实请求通过。上面的“不建议默认打开”结论不变，回滚方式见
 `sources/dsv41-20261031-uncensored-fp8/docs/operations.md`。
 
 **验证用的 binary 与 0006 的差别**：A/B/A/B 跑的是 `strata-exp` 树构建的 `build-mfma-exp/strata-dsv41`，即

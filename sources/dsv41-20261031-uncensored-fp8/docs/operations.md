@@ -35,7 +35,7 @@ own whole experts.
 | piece | path |
 |---|---|
 | engine | `/4T-02/strata-work/repro-build/build/strata-dsv41` (clean v0.2.9 reproduction; previous: `build-exp`) |
-| model pack | `/4T-02/dsv41-conv/pack8` (IQ1_S experts, 106.2 GB at 1.56 bpw) over `/4T-02/dsv41-conv/DSV41-UNC-v3-iq1s.gguf` (325.8 GB); native dense/Engram, quantized experts only. Previous: native pack4 (v3, 508 GB) and quantized pack7 (IQ2/Q4_K, 350 GB) |
+| model pack | `/4T-02/dsv41-conv/pack7` (IQ2_XXS experts, 140.1 GB at 2.06 bpw) over `/4T-02/dsv41-conv/DSV41-UNC-v7-q4k.gguf` (350.3 GB); previous: pack8 IQ1_S (106.2 GB) and native pack4 |
 | serve config | `/4T-02/strata-work/dsv41-serve-p7tp.json` |
 | start script | `/4T-02/strata-work/serve_pack7_tp.sh` (container `dsv41-serve`, port 8095; name is historical) |
 | fallback | `/4T-02/strata-work/serve_pack7.sh` (baseline engine, layer split, pack7) |
@@ -43,8 +43,8 @@ own whole experts.
 Effective engine line and environment:
 
 ```
-repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack8 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
-DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production experiment since 21:43
+repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack7 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
+DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1  DS4_DSPARK_MAX=7
 ```
 
 `--restart unless-stopped` is set, but a `docker rm` still takes the service down — always
@@ -53,13 +53,17 @@ re-run the start script after removing the container.
 Production was switched on 2026-11-03 21:32 to the clean v0.2.9 reproduction build
 (`repro-build/build/strata-dsv41`), at 21:43 it was restarted with `DS4_FAST_ATTN=1` (MMAC path,
 explicit production experiment), at 21:58 the model pack was switched from the quantized pack7
-(IQ2/Q4_K, v7-q4k) to the **native MXFP4 pack4** (v3, 508 GB), and at 23:57 to **pack8, the IQ1_S
+(IQ2/Q4_K, v7-q4k) to the **native MXFP4 pack4** (v3, 508 GB), at 23:57 to **pack8, the IQ1_S
 expert quant** (`DSV41-UNC-v3-iq1s.gguf`, 325.8 GB; experts 106.2 GB/1.56 bpw, all in VRAM; native
-dense/Engram). Config backups:
+dense/Engram), and at 2026-11-04 02:33 back to **pack7 + `DS4_DSPARK_MAX=7`**. Measured decode on
+the 256-token benchmark: pack7+max7 **45.6–46.0 tok/s** (drafts 205, accepted 190); pack7 without
+max7 ~35–36; pack8 IQ1_S ~26.6; `STRATA_DS4_DSPARK_CUM=0.5` 43.3, `=0.7` ~38.5, max5 ~32,
+max8 ~38.7, sampled drafts ~31.5, MMVQ knobs ~34.4. Config backups:
 `/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218` (pre-clean-build),
-`...bak-pack7-20261103-215758` (pack7), and `...bak-pack4-20261103-235735` (pack4). The pre-fast-attn
-start script is at `/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`. Restore the desired
-config and re-run the start script to roll back. Health and a small inference request were verified
+`...bak-pack7-20261103-215758`, `...bak-pack4-20261103-235735`, and the pack8 backups
+(`...bak-pack8-*`). The pre-fast-attn start script is at
+`/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`. Restore the desired config and re-run the
+start script to roll back. Health and a small inference request were verified
 after each
 change.
 
@@ -222,19 +226,18 @@ The expert-TP change is exported as a patch: `sources/dsv41-20261031-uncensored-
 
 | pack | dense | experts | gguf |
 |---|---|---|---|
-| **pack8** | **native (BF16/MXFP4/MXFP8)** | **IQ1_S** (106.2 GB, 1.56 bpw) | `DSV41-UNC-v3-iq1s.gguf`, 325.8 GB — **current production since 23:57** |
+| **pack7** | **Q4_K** | **IQ2_XXS** | `DSV41-UNC-v7-q4k.gguf`, 350.3 GB — **current production since 2026-11-04 02:33, with `DS4_DSPARK_MAX=7`** |
+| pack8 | native (BF16/MXFP4/MXFP8) | IQ1_S (106.2 GB, 1.56 bpw) | `DSV41-UNC-v3-iq1s.gguf`, 325.8 GB — previous |
 | pack4 | MXFP4 (native) | MXFP4 | `DSV41-UNC-v3.gguf`, 508.4 GB — previous native production |
 | pack5 | Q6_K | IQ2_XXS | `DSV41-UNC-v4-iq2.gguf`, 359.7 GB |
 | pack6 | Q6_K | IQ2_XXS | `DSV41-UNC-v5-q6k.gguf`, 352.0 GB |
-| pack7 | Q4_K | IQ2_XXS | `DSV41-UNC-v7-q4k.gguf`, 350.3 GB — previous quantized production |
 
-Production switched to pack8 at 23:57: IQ1_S experts (106.2 GB) fit entirely in the two cards' VRAM;
-native dense/Engram stay on CPU. Quality is below pack4; the fast-attn experiment remains on. A controlled
-decode A/B (2026-11-04, same 45-token prompt, 256 generated tokens, DSpark on) measured:
-**pack8 IQ1_S 26.2 / 26.7 / 26.6 tok/s** vs **pack7 IQ2_XXS 35.2 / 36.3 / 36.6 tok/s** (prompt
-16.6–17.4 vs 21.4–23.1 tok/s). IQ1_S does **not** win: it fills VRAM but its dequant/matvec is slower,
-and DSpark accepts fewer drafts (167/220 vs 184/224 in that test). The 12.9 tok/s first short request
-was a cold 14-token sample, not the stable decode rate.
+Production returned to pack7 at 2026-11-04 02:33 with `DS4_DSPARK_MAX=7`: decode **45.6–46.0 tok/s**
+on the 256-token benchmark (drafts 205, accepted 190), prompt ~24–25 tok/s. The IQ1_S pack8 is slower
+(26.2–26.7 tok/s) because its dequant/matvec is slower and DSpark accepts fewer drafts; it remains
+available as the all-experts-in-VRAM fallback. Other DSpark knobs did not beat max7 alone:
+`STRATA_DS4_DSPARK_CUM=0.5` 43.3, `=0.7` ~38.5, max5 ~32, max8 ~38.7, sampled drafts ~31.5,
+`STRATA_MMVQ_WV2_GROUP/LDS` ~34.4. The 12.9 tok/s first short request was a cold 14-token sample.
 
 ### IQ1_S pack build (2026-11-03)
 

@@ -16,7 +16,7 @@ docker run -d --name dsv41-serve --restart unless-stopped --privileged \
   --device /dev/kfd --device /dev/dri \
   -v /usr/local/hyhal:/usr/local/hyhal:ro -v /opt/hyhal:/opt/hyhal:ro \
   -v /4T-02:/4T-02 -p 8095:8095 \
-  -e DS4_AR_RS2=1 -e DS4_EXPERT_TP=1 -e DS4_ATTN_SPLIT=1 -e DS4_FAST_ATTN=1 \
+  -e DS4_AR_RS2=1 -e DS4_EXPERT_TP=1 -e DS4_ATTN_SPLIT=1 -e DS4_FAST_ATTN=1 -e DS4_DSPARK_MAX=7 \
   -w /4T-02/strata-work/strata \
   --entrypoint bash dcu-qwen3-5:perfect-0.0.1 -lc '
     source /opt/dtk/env.sh 2>/dev/null

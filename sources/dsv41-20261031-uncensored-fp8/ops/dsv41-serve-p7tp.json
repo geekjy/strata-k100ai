@@ -1,3 +1,3 @@
 {"exe":"/4T-02/strata-work/repro-build/build/strata-dsv41",
- "args":["--pack","/4T-02/dsv41-conv/pack8","--gpus","0,1","--tp","2","--dspark","on","--mmap-experts","on"],
+ "args":["--pack","/4T-02/dsv41-conv/pack7","--gpus","0,1","--tp","2","--dspark","on","--mmap-experts","on"],
  "cwd":"/4T-02/strata-work","model_name":"DeepSeek-V4.1-Flash-1017"}

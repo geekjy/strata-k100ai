@@ -9,8 +9,8 @@ Two routes: **copy the working set** (fast, exact, ~360 GB to move) or **rebuild
 |---|---|
 | DCUs | 2x Hygon K100_AI (`gfx928`) — the binaries here are compiled for that arch only. A different DCU needs its own `-DCMAKE_HIP_ARCHITECTURES`. |
 | GPU driver | the Hygon driver (`hyhal`) installed **on the host**, exposed to the container as `/opt/hyhal` and `/usr/local/hyhal`. Check with `hy-smi`. |
-| RAM | >= 200 GB free for pack8 (production load used ~146 GB; the native pack4 fallback needs ~318 GB; the box has 503 GB) |
-| disk | >= 700 GB free for the model (pack8 GGUF 326 GB + dspark 8.5 + mmproj 1.0 + margin; the native pack4 fallback adds 508 GB) |
+| RAM | >= 350 GB free for the pack7 expert store (production load ~318 GB; the pack8 fallback ~146 GB; the box has 503 GB) |
+| disk | >= 700 GB free for the model (pack7 GGUF 350 GB + dspark 8.5 + mmproj 1.0 + margin; pack8 adds 326 GB) |
 | docker | with `--device /dev/kfd --device /dev/dri` working |
 | toolkit | DTK 26.04 **inside the container image** (clang 17, `hipgdb`), not on the host |
 | kernel | `kernel.core_pattern=/dev/null` (see the operations runbook, section 6.1) |
@@ -32,26 +32,26 @@ If the image cannot be copied, it is built with the DTK *Container Toolkit* from
 22.04 base + the DTK 26.04 tarball from `https://download.sourcefind.cn:65024/file/1/DTK-26.10/`
 (or `DTK-26.04/`). That is a separate exercise — prefer `docker save`.
 
-## 2. The model (route A: copy) — ~330 GB
+## 2. The model (route A: copy) — ~350 GB
 
-Production uses **pack8**: native dense/Engram with **IQ1_S routed experts**, over
-`DSV41-UNC-v3-iq1s.gguf` (325.8 GB; experts 106.2 GB at 1.56 bpw, all in VRAM). Copy pack8 + that
-GGUF; pack4/v7 are optional fallbacks.
+Production uses **pack7**: Q4_K dense with **IQ2_XXS routed experts**, over
+`DSV41-UNC-v7-q4k.gguf` (350.3 GB). Copy pack7 + that GGUF; pack8 (IQ1_S) and pack4 (native) are
+optional fallbacks.
 
 ```bash
-rsync -av --progress /4T-02/dsv41-conv/pack8/                     NEW:/4T-02/dsv41-conv/pack8/
-rsync -av --progress /4T-02/dsv41-conv/DSV41-UNC-v3-iq1s.gguf     NEW:/4T-02/dsv41-conv/
+rsync -av --progress /4T-02/dsv41-conv/pack7/                     NEW:/4T-02/dsv41-conv/pack7/
+rsync -av --progress /4T-02/dsv41-conv/DSV41-UNC-v7-q4k.gguf      NEW:/4T-02/dsv41-conv/
 rsync -av --progress /4T-02/dsv41-conv/dspark-UNC-bf16.gguf       NEW:/4T-02/dsv41-conv/
 rsync -av --progress /4T-02/dsv41-conv/mmproj-UNC-bf16.gguf       NEW:/4T-02/dsv41-conv/
 ```
 
-`pack8/` (4.1 MB) is the config (`ds4.txt`) + tensor index (`tensors.txt`) + `engram.bin` +
-`slots/` + `expert-profile.bin` (copied from pack4; routing is quant-independent) + `tokenizer/`.
-**Do not omit `expert-profile.bin`** — without it the VRAM expert plan degrades badly. The engine
-reads dense/Engram from `v3-iq1s.gguf` and experts from its IQ1_S tensors.
+`pack7/` (481 MB) is the config (`ds4.txt`) + tensor index (`tensors.txt`) + `engram.bin` +
+`slots/` + `expert-profile.bin` + `tokenizer/`. **Do not omit `expert-profile.bin`** — without it the
+VRAM expert plan degrades badly. The engine reads dense/Engram and the IQ2_XXS experts from the
+GGUF. Run the production script with `DS4_DSPARK_MAX=7` (already set in `serve_pack7_tp.sh`).
 
-The native pack4 fallback is `pack4/` + `DSV41-UNC-v3.gguf` (508 GB); the quantized pack7 fallback is
-`pack7/` + `DSV41-UNC-v7-q4k.gguf` (350 GB). Neither is the production default.
+The IQ1_S fallback is `pack8/` + `DSV41-UNC-v3-iq1s.gguf` (325.8 GB; all experts in VRAM, ~26 tok/s);
+the native fallback is `pack4/` + `DSV41-UNC-v3.gguf` (508 GB). Neither is the production default.
 
 ## 3. The sources (route A: copy, 196 MB)
 
@@ -138,10 +138,10 @@ ninja -C /work/build-exp -j 48 strata-dsv41
 ```bash
 # config (already in the copy): /4T-02/strata-work/dsv41-serve-p7tp.json
 #   {"exe":"/4T-02/strata-work/repro-build/build/strata-dsv41",
-#    "args":["--pack","/4T-02/dsv41-conv/pack8","--gpus","0,1","--tp","2","--dspark","on","--mmap-experts","on"],
+#    "args":["--pack","/4T-02/dsv41-conv/pack7","--gpus","0,1","--tp","2","--dspark","on","--mmap-experts","on"],
 #    "cwd":"/4T-02/strata-work","model_name":"DeepSeek-V4.1-Flash-1017"}
 
-bash /4T-02/strata-work/serve_pack7_tp.sh        # starts, waits for /health, ~190-200 s
+bash /4T-02/strata-work/serve_pack7_tp.sh        # starts, waits for /health, ~150-160 s
 bash /4T-02/strata-work/hc.sh                    # health + one real answer
 ```
 

@@ -6,8 +6,8 @@ assume the layout described in `../docs/operations.md`.
 
 | file | purpose |
 |---|---|
-| `serve_pack7_tp.sh` | **production**: expert-index TP (both cards per layer), **pack8 (IQ1_S experts, 1.56 bpw)** + DSpark, container `dsv41-serve`, port 8095, `--restart unless-stopped` (the script name is historical) |
-| `dsv41-serve-p7tp.json` | the serve config it uses (engine path, args, model name; currently `--pack pack8`) |
+| `serve_pack7_tp.sh` | **production**: expert-index TP (both cards per layer), **pack7 (IQ2_XXS experts)** + DSpark, `DS4_DSPARK_MAX=7`, container `dsv41-serve`, port 8095, `--restart unless-stopped` (the script name is historical) |
+| `dsv41-serve-p7tp.json` | the serve config it uses (engine path, args, model name; currently `--pack pack7`) |
 | `serve_pack7.sh` | fallback: the baseline engine (layer split, no cross-card all-reduce) on pack7 |
 | `dsv41-serve-p7.json` | the fallback's config |
 | `hc.sh` | health check: container state, `/health`, one real answer, disk |
@@ -16,10 +16,10 @@ assume the layout described in `../docs/operations.md`.
 Both serve scripts assume:
 
 - the container image `dcu-qwen3-5:perfect-0.0.1`,
-- `/4T-02/dsv41-conv/pack8` (+ `DSV41-UNC-v3-iq1s.gguf`, 325.8 GB, `dspark-UNC-bf16.gguf`,
-  `mmproj-UNC-bf16.gguf`). Pack8 keeps the native dense/Engram and quantizes only the routed experts
-  to IQ1_S (106.2 GB at 1.56 bpw), so all experts fit in the two cards' VRAM; quality is below the
-  native pack4. The `expert-profile.bin`/`slots` are copied from pack4 (same routing),
+- `/4T-02/dsv41-conv/pack7` (+ `DSV41-UNC-v7-q4k.gguf`, 350.3 GB, `dspark-UNC-bf16.gguf`,
+  `mmproj-UNC-bf16.gguf`). Pack7 is the IQ2_XXS expert quant; it is the current production because it
+  is still much faster than the IQ1_S pack8 (26 tok/s) and the native pack4. The previous IQ1_S pack8
+  (`DSV41-UNC-v3-iq1s.gguf`, 325.8 GB) remains on disk as a fallback,
 - the engine binary at `/4T-02/strata-work/repro-build/build/strata-dsv41` (the clean v0.2.9
   reproduction; production since 2026-11-03, `DS4_FAST_ATTN=1` since 21:43), or
   `/4T-02/strata-work/build-exp/strata-dsv41` (the previous production binary) /
@@ -30,12 +30,17 @@ Both serve scripts assume:
 Environment that matters (see `../docs/operations.md` section 5):
 
 ```
-DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production since 2026-11-03 21:43 (explicit experiment)
+DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1  DS4_DSPARK_MAX=7
 ```
 
-Production uses **pack8** (IQ1_S experts, 106.2 GB, all in VRAM) since 23:57. To roll back to the
-native pack4: restore `/4T-02/strata-work/dsv41-serve-p7tp.json.bak-pack4-20261103-235735` and re-run
-`serve_pack7_tp.sh`; to roll back to pack7 use `...bak-pack7-20261103-215758`.
+`DS4_DSPARK_MAX=7` was added 2026-11-04 and measured **45.6–46.0 tok/s** decode on the 256-token
+benchmark; without it the same service measured ~35–36. Other tested knobs did **not** help:
+`STRATA_DS4_DSPARK_CUM=0.5` 43.3, `=0.7` ~38.5, `DS4_DSPARK_MAX=5` ~32, `=8` ~38.7,
+`DS4_DSPARK_SAMPLE=1` ~31.5, and `STRATA_MMVQ_WV2_GROUP/LDS` ~34.4. Production uses `max7` alone.
+
+Production uses **pack7** + `DS4_DSPARK_MAX=7` since 2026-11-04 02:33. To roll back to the IQ1_S
+pack8: restore a `dsv41-serve-p7tp.json.bak-pack8-*` config and re-run `serve_pack7_tp.sh`; to the
+native pack4 use `...bak-pack4-20261103-235735`.
 
 `DS4_FAST_ATTN` was unset before 2026-11-03 21:43. It is now enabled on the clean v0.2.9
 reproduction (`repro-build/build/strata-dsv41`), so gfx928 takes the **MMAC** path. Caveat: the
