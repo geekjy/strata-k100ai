@@ -150,8 +150,10 @@ sources/dsv41-20261031-gfx928/reproduce-clean-v029.sh /path/to/v029.tar.gz --bui
 先定位 592 行的偏差；即使 10K 的 2.8% 是真的，也要先确认 32K 和数值可接受。
 
 **生产备注**：按用户要求在 2026-11-03 21:43 把生产 `dsv41-serve` 显式设为 `DS4_FAST_ATTN=1`
-（clean `repro-build` + MMAC），健康检查和一次真实请求通过；上面的“不建议默认打开”结论不变，
-回滚方式见 `sources/dsv41-20261031-uncensored-fp8/docs/operations.md`。
+（clean `repro-build` + MMAC），健康检查和一次真实请求通过；21:58 又按要求把模型从量化 pack7 切到
+**原生 MXFP4/FP8 pack4（`DSV41-UNC-v3.gguf`，508 GB）**，health 200、真实请求通过（加载后约 318 GB
+RAM，速度明显低于量化版）。上面的“不建议默认打开”结论不变，回滚方式见
+`sources/dsv41-20261031-uncensored-fp8/docs/operations.md`。
 
 **验证用的 binary 与 0006 的差别**：A/B/A/B 跑的是 `strata-exp` 树构建的 `build-mfma-exp/strata-dsv41`，即
 baseline + `expert-index-tp.patch` + 0006。它的 `T==1` decode 8-row prefetch（去掉

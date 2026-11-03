@@ -1,6 +1,6 @@
 # 更新记录
 
-## 2026-11-03 生产切换到 clean v029 复现构建；21:43 开启 DS4_FAST_ATTN=1
+## 2026-11-03 生产切换到 clean v029 复现构建；21:43 开 DS4_FAST_ATTN=1；21:58 切到非量化 pack4
 
 - `dsv41-serve` 的 engine 从 `/4T-02/strata-work/build-exp/strata-dsv41` 切到
   `/4T-02/strata-work/repro-build/build/strata-dsv41`（clean v0.2.9 + baseline + 0002/0003/0004 +
@@ -8,9 +8,12 @@
 - 21:43 再次重启，加入 `DS4_FAST_ATTN=1`，gfx928 走 **MMAC** 路径；健康检查、真实请求均通过。
   Caveat 不变：4K 受控 A/B/A/B 无收益、10K 最好约 +2.8%、全 prompt 位置 KL 平均 0.0255
   （last-position 0.00131）。这是显式生产实验，不是默认推荐。
-- 旧配置备份：`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`；旧启动脚本备份：
-  `/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`。回滚：恢复脚本（以及需要时恢复旧配置）并重跑
-  `serve_pack7_tp.sh`。
+- 21:58 按“生产模式不要用量化版”把 `--pack` 从 **pack7（IQ2/Q4_K 量化）** 切到 **pack4（原生
+  MXFP4/FP8，`DSV41-UNC-v3.gguf` 508 GB）**。health 200，真实请求通过；加载后约 318 GB RAM。
+  原生模型明显更慢（短请求 prefill ~15 tok/s、decode ~8 tok/s 量级），这是质量优先的取舍。
+- 旧配置备份：`...json.bak-20261103-213218`（旧 build-exp）、
+  `...json.bak-pack7-20261103-215758`（pack7）；旧启动脚本备份：`serve_pack7_tp.sh.bak-20261103-214315`。
+  回滚到 pack7：恢复 pack7 配置并重跑脚本；回滚 fast-attn：恢复脚本备份并重跑。
 - repo 的 `ops/dsv41-serve-p7tp.json`、`ops/serve_pack7_tp.sh`、`ops/README.md`、`operations.md`、
   `deploy-new-machine.md` 已同步。
 

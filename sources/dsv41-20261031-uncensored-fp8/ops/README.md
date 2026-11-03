@@ -6,9 +6,9 @@ assume the layout described in `../docs/operations.md`.
 
 | file | purpose |
 |---|---|
-| `serve_pack7_tp.sh` | **production**: expert-index TP (both cards per layer), pack7 + DSpark, container `dsv41-serve`, port 8095, `--restart unless-stopped` |
-| `dsv41-serve-p7tp.json` | the serve config it uses (engine path, args, model name) |
-| `serve_pack7.sh` | fallback: the baseline engine (layer split, no cross-card all-reduce) on the same pack |
+| `serve_pack7_tp.sh` | **production**: expert-index TP (both cards per layer), **pack4 (original MXFP4)** + DSpark, container `dsv41-serve`, port 8095, `--restart unless-stopped` (the script name is historical) |
+| `dsv41-serve-p7tp.json` | the serve config it uses (engine path, args, model name; currently `--pack pack4`) |
+| `serve_pack7.sh` | fallback: the baseline engine (layer split, no cross-card all-reduce) on pack7 |
 | `dsv41-serve-p7.json` | the fallback's config |
 | `hc.sh` | health check: container state, `/health`, one real answer, disk |
 | `ids17.txt`, `ids_2100.txt`, `ids_3100.txt`, `ids_4k.txt`, `ids_10k.txt` | the token-id prompt files used for the measurements (17 / 2100 / 3100 / 4080 / 10200 tokens) |
@@ -16,9 +16,11 @@ assume the layout described in `../docs/operations.md`.
 Both serve scripts assume:
 
 - the container image `dcu-qwen3-5:perfect-0.0.1`,
-- `/4T-02/dsv41-conv/pack7` (+ `DSV41-UNC-v7-q4k.gguf`, `dspark-UNC-bf16.gguf`, `mmproj-UNC-bf16.gguf`),
+- `/4T-02/dsv41-conv/pack4` (+ `DSV41-UNC-v3.gguf` 508 GB, `dspark-UNC-bf16.gguf`,
+  `mmproj-UNC-bf16.gguf`). Pack4 is the native MXFP4/FP8 model, not the IQ2/Q4_K requantized pack7,
+  per the production preference for the non-requantized weights,
 - the engine binary at `/4T-02/strata-work/repro-build/build/strata-dsv41` (the clean v0.2.9
-  reproduction; production since 2026-11-03, `DS4_FAST_ATTN` unset), or
+  reproduction; production since 2026-11-03, `DS4_FAST_ATTN=1` since 21:43), or
   `/4T-02/strata-work/build-exp/strata-dsv41` (the previous production binary) /
   `/4T-02/strata-work/build-dsv41-full/strata-dsv41` (baseline),
 - the Python serve layer inside the image (`python3 -m serve.server`), which spawns the engine as a

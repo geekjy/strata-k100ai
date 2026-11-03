@@ -35,15 +35,15 @@ own whole experts.
 | piece | path |
 |---|---|
 | engine | `/4T-02/strata-work/repro-build/build/strata-dsv41` (clean v0.2.9 reproduction; previous: `build-exp`) |
-| model pack | `/4T-02/dsv41-conv/pack7` (config + index) over `/4T-02/dsv41-conv/DSV41-UNC-v7-q4k.gguf` (350.3 GB) |
+| model pack | `/4T-02/dsv41-conv/pack4` (native MXFP4/FP8 config + index) over `/4T-02/dsv41-conv/DSV41-UNC-v3.gguf` (508 GB); **not** the quantized pack7 / v7-q4k |
 | serve config | `/4T-02/strata-work/dsv41-serve-p7tp.json` |
-| start script | `/4T-02/strata-work/serve_pack7_tp.sh` (container `dsv41-serve`, port 8095) |
-| fallback | `/4T-02/strata-work/serve_pack7.sh` (baseline engine, layer split) |
+| start script | `/4T-02/strata-work/serve_pack7_tp.sh` (container `dsv41-serve`, port 8095; name is historical) |
+| fallback | `/4T-02/strata-work/serve_pack7.sh` (baseline engine, layer split, pack7) |
 
 Effective engine line and environment:
 
 ```
-repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack7 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
+repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack4 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
 DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production experiment since 21:43
 ```
 
@@ -51,17 +51,20 @@ DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production 
 re-run the start script after removing the container.
 
 Production was switched on 2026-11-03 21:32 to the clean v0.2.9 reproduction build
-(`repro-build/build/strata-dsv41`), and at 21:43 it was restarted with `DS4_FAST_ATTN=1` (MMAC path,
-explicit production experiment). The pre-switch config is backed up at
-`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218`, and the pre-fast-attn start script at
-`/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`; restore those and re-run the start script to
-roll back. Health and a small inference request were verified after both changes.
+(`repro-build/build/strata-dsv41`), at 21:43 it was restarted with `DS4_FAST_ATTN=1` (MMAC path,
+explicit production experiment), and at 21:58 the model pack was switched from the quantized pack7
+(IQ2/Q4_K, v7-q4k) to the **native MXFP4 pack4** (v3, 508 GB). Config backups:
+`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218` (pre-clean-build) and
+`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-pack7-20261103-215758` (pack7). The pre-fast-attn start
+script is at `/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`. Restore the desired config
+and re-run the start script to roll back. Health and a small inference request were verified after each
+change.
 
 ## 3. Day-to-day commands (on the host)
 
 ```bash
 # start / restart the production
-bash /4T-02/strata-work/serve_pack7_tp.sh          # waits for /health, ~150-170 s
+bash /4T-02/strata-work/serve_pack7_tp.sh          # waits for /health, ~190-200 s on pack4
 
 # health + a real answer  (the standard check)
 bash /4T-02/strata-work/hc.sh
@@ -216,13 +219,14 @@ The expert-TP change is exported as a patch: `sources/dsv41-20261031-uncensored-
 
 | pack | dense | experts | gguf |
 |---|---|---|---|
-| pack4 | MXFP4 (original) | MXFP4 | `DSV41-UNC-v3.gguf`, 508.4 GB |
+| **pack4** | **MXFP4 (native)** | **MXFP4** | `DSV41-UNC-v3.gguf`, 508.4 GB — **current production since 21:58** |
 | pack5 | Q6_K | IQ2_XXS | `DSV41-UNC-v4-iq2.gguf`, 359.7 GB |
 | pack6 | Q6_K | IQ2_XXS | `DSV41-UNC-v5-q6k.gguf`, 352.0 GB |
-| **pack7** | **Q4_K** | IQ2_XXS | `DSV41-UNC-v7-q4k.gguf`, 350.3 GB |
+| pack7 | Q4_K | IQ2_XXS | `DSV41-UNC-v7-q4k.gguf`, 350.3 GB — previous production |
 
-pack7 is production. Switching packs is a config edit (`dsv41-serve-p7tp.json`), not a rebuild.
-The quantisation was ruled out as a crash cause by running pack4 and pack7 side by side.
+Production switched to the native pack4 at 21:58 (non-requantized; ~318 GB RAM after load, noticeably
+slower than pack7). Switching packs is a config edit (`dsv41-serve-p7tp.json`), not a rebuild. The
+quantisation was ruled out as a crash cause by running pack4 and pack7 side by side.
 
 ## 9. Known gaps
 
