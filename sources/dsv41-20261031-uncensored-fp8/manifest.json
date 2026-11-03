@@ -763,6 +763,14 @@
           "decode_without_dspark": "22.4 tok/s",
           "decode_with_dspark": "30.5 tok/s"
         }
+      },
+      "decode_optimisation": {
+        "profile_first": "DS4_PROF zeigte pro Token (Summe beider Karten): attention 50.8, between layers 32.4, down+post 18.9, routing+shared 13.5, experts 6.3, warten auf die CPU lane 3.2 - das All-Reduce ist also NICHT der Engpass",
+        "allreduce_pipelining": "verworfen: die Wartezeit auf die CPU lane ist 3.17 ms, routing waits 0.00 - ein Umbau des All-Reduce haette kaum etwas gebracht",
+        "vram_experts": "verworfen: max-context 32768 -> 12288 -> 8192 aendert die Zahl der VRAM-Experten nur um 5803 -> 5808 -> 5809 (+0.1%), weil der KV-Cache dieses Modells winzig ist (0.03 -> 0.01 GB)",
+        "attention_split": "DS4_ATTN_SPLIT=1 (der Split-KV-Kernel des Projekts, fuer eine Query gebaut): im A/B-Vergleich 23.39 -> 25.21 tok/s (+7.8%) und attention 50.78 -> 43.34 ms; in Produktion aktiviert, drei Messungen 23.1 / 23.6 / 29.8 tok/s (Median 23.6)",
+        "fast_attn_is_broken": "DS4_FAST_ATTN=1 fuehrt zu einem VMFault - dieser Schalter darf NICHT an sein",
+        "attention_and_head_are_already_split": "NHL = g.heads / head_members(nm) und d.logits_part pro Mitglied: die Aufteilung von attention und Ausgabe-Kopf macht die Engine bereits von sich aus"
       }
     }
   },
@@ -812,5 +820,5 @@
       "tooling_note": "both requant tools needed Q4_K added: ds4_requant_gguf2.py (TYPES 12, block 256, 144 B) and requant_gguf_tensor.cpp (GGML_TYPE_Q4_K)"
     }
   },
-  "production": "Experten-TP (beide Karten je Layer), pack7 + DSpark, health 200, 12/12 stabil"
+  "production": "Experten-TP + DSpark + DS4_ATTN_SPLIT, pack7, health 200"
 }
