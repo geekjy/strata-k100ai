@@ -33,6 +33,10 @@ Environment that matters (see `../docs/operations.md` section 5):
 DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production since 2026-11-03 21:43 (explicit experiment)
 ```
 
+Production uses **pack8** (IQ1_S experts, 106.2 GB, all in VRAM) since 23:57. To roll back to the
+native pack4: restore `/4T-02/strata-work/dsv41-serve-p7tp.json.bak-pack4-20261103-235735` and re-run
+`serve_pack7_tp.sh`; to roll back to pack7 use `...bak-pack7-20261103-215758`.
+
 `DS4_FAST_ATTN` was unset before 2026-11-03 21:43. It is now enabled on the clean v0.2.9
 reproduction (`repro-build/build/strata-dsv41`), so gfx928 takes the **MMAC** path. Caveat: the
 controlled 4K A/B/A/B measured **no prefill gain**, 10K only about **+2.8 %**, and the all-prompt KL

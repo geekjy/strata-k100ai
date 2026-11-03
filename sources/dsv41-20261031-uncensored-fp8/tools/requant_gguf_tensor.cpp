@@ -11,7 +11,9 @@
 
 static int type_by_name(const char * s) {
     if (std::strcmp(s, "IQ2_XXS") == 0) return GGML_TYPE_IQ2_XXS;
+    if (std::strcmp(s, "IQ1_S") == 0)  return GGML_TYPE_IQ1_S;
     if (std::strcmp(s, "Q6_K") == 0)    return GGML_TYPE_Q6_K;
+    if (std::strcmp(s, "Q4_K") == 0)    return GGML_TYPE_Q4_K;   // K100AI: the dense set one step narrower
     if (std::strcmp(s, "BF16") == 0)    return GGML_TYPE_BF16;
     if (std::strcmp(s, "MXFP4") == 0)   return GGML_TYPE_MXFP4;
     return -1;

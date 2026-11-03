@@ -233,6 +233,29 @@ native dense/Engram stay on CPU. Quality is below pack4; the fast-attn experimen
 packs is a config edit (`dsv41-serve-p7tp.json`), not a rebuild. The quantisation was ruled out as a
 crash cause by running pack4 and pack7 side by side.
 
+### IQ1_S pack build (2026-11-03)
+
+From the native v3 GGUF (experts MXFP4), with the IQ1_S support added to `tools/ds4_requant_gguf2.py`
+and `tools/requant_gguf_tensor.cpp` (rebuild `requant_all` against llama.cpp's ggml):
+
+```bash
+# 120 expert tensors, 288.8 GB MXFP4 -> 106.2 GB IQ1_S; 66.6 min on this box with --jobs 64
+python3 ds4_requant_gguf2.py --src DSV41-UNC-v3.gguf --dst DSV41-UNC-v3-iq1s.gguf \
+  --mode experts --target IQ1_S --jobs 64 --requant requant_all
+
+# pack only (the engine reads weights from the GGUF; no experts.bin)
+python3 tools/dsv41/pack_gguf.py --model /4T-02/dsv41-conv \
+  --shards DSV41-UNC-v3-iq1s.gguf \
+  --dspark-gguf dspark-UNC-bf16.gguf --dspark-noise-token 128799 --dspark-markov-rank 256 \
+  --mmproj mmproj-UNC-bf16.gguf --out /4T-02/dsv41-conv/pack8
+
+# routing profile/slots are quant-independent
+cp -a pack4/expert-profile.bin pack4/slots pack8/
+```
+
+`pack8` is 4.1 MB of metadata; the 325.8 GB GGUF holds dense/Engram + IQ1_S experts. VRAM after load:
+60.5 + 55.5 GB of 2x64 GB; RAM ~146 GB.
+
 ## 9. Known gaps
 
 - vision + expert-TP is untested;

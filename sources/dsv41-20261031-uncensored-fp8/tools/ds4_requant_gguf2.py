@@ -22,6 +22,7 @@ SCALAR = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
 ALIGN = 32
 # ggml type ids and (block, bytes) — this gguf-py predates type 43 (the engine's MXFP8)
 MXFP4, BF16, IQ2_XXS, Q6_K, MXFP8 = 39, 30, 16, 14, 43
+IQ1_S = 19
 # the matrices that carry the per-token bandwidth: the attention projections and the shared expert
 DENSE_SUFFIXES = ("attn_q_a.weight", "attn_q_b.weight", "attn_kv.weight",
                   "attn_output_a.weight", "attn_output_b.weight",
@@ -33,8 +34,10 @@ TYPES = {
     30: ("BF16",    (1, 2)),
     39: ("MXFP4",   (32, 17)),
     43: ("MXFP8",   (32, 33)),
+    19: ("IQ1_S", (256, 50)),
     16: ("IQ2_XXS", (256, 66)),
     14: ("Q6_K",    (256, 210)),
+    12: ("Q4_K",    (256, 144)),
 }
 
 
@@ -105,7 +108,7 @@ def main():
     ap.add_argument("--src", required=True)
     ap.add_argument("--dst", required=True)
     ap.add_argument("--mode", choices=["experts", "dense"], required=True)
-    ap.add_argument("--target", required=True, choices=["IQ2_XXS", "Q6_K"])
+    ap.add_argument("--target", required=True, choices=["IQ2_XXS", "IQ1_S", "Q6_K", "Q4_K"])
     ap.add_argument("--requant", default="/4T-02/strata-work/requant_all")
     ap.add_argument("--tmpdir", default=None)
     ap.add_argument("--jobs", type=int, default=64)
@@ -113,7 +116,7 @@ def main():
     ap.add_argument("--reuse", action="store_true")
     args = ap.parse_args()
 
-    tgt = {"IQ2_XXS": IQ2_XXS, "Q6_K": Q6_K}[args.target]
+    tgt = {"IQ2_XXS": IQ2_XXS, "IQ1_S": IQ1_S, "Q6_K": Q6_K, "Q4_K": 12}[args.target]
     src_type = MXFP4 if args.mode == "experts" else BF16
     tmp = Path(args.tmpdir or ("/4T-02/dsv41-conv/req-%s" % args.target.lower()))
 
