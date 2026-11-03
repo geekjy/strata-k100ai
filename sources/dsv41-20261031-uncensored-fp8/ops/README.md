@@ -6,8 +6,8 @@ assume the layout described in `../docs/operations.md`.
 
 | file | purpose |
 |---|---|
-| `serve_pack7_tp.sh` | **production**: expert-index TP (both cards per layer), **pack4 (original MXFP4)** + DSpark, container `dsv41-serve`, port 8095, `--restart unless-stopped` (the script name is historical) |
-| `dsv41-serve-p7tp.json` | the serve config it uses (engine path, args, model name; currently `--pack pack4`) |
+| `serve_pack7_tp.sh` | **production**: expert-index TP (both cards per layer), **pack8 (IQ1_S experts, 1.56 bpw)** + DSpark, container `dsv41-serve`, port 8095, `--restart unless-stopped` (the script name is historical) |
+| `dsv41-serve-p7tp.json` | the serve config it uses (engine path, args, model name; currently `--pack pack8`) |
 | `serve_pack7.sh` | fallback: the baseline engine (layer split, no cross-card all-reduce) on pack7 |
 | `dsv41-serve-p7.json` | the fallback's config |
 | `hc.sh` | health check: container state, `/health`, one real answer, disk |
@@ -16,9 +16,10 @@ assume the layout described in `../docs/operations.md`.
 Both serve scripts assume:
 
 - the container image `dcu-qwen3-5:perfect-0.0.1`,
-- `/4T-02/dsv41-conv/pack4` (+ `DSV41-UNC-v3.gguf` 508 GB, `dspark-UNC-bf16.gguf`,
-  `mmproj-UNC-bf16.gguf`). Pack4 is the native MXFP4/FP8 model, not the IQ2/Q4_K requantized pack7,
-  per the production preference for the non-requantized weights,
+- `/4T-02/dsv41-conv/pack8` (+ `DSV41-UNC-v3-iq1s.gguf`, 325.8 GB, `dspark-UNC-bf16.gguf`,
+  `mmproj-UNC-bf16.gguf`). Pack8 keeps the native dense/Engram and quantizes only the routed experts
+  to IQ1_S (106.2 GB at 1.56 bpw), so all experts fit in the two cards' VRAM; quality is below the
+  native pack4. The `expert-profile.bin`/`slots` are copied from pack4 (same routing),
 - the engine binary at `/4T-02/strata-work/repro-build/build/strata-dsv41` (the clean v0.2.9
   reproduction; production since 2026-11-03, `DS4_FAST_ATTN=1` since 21:43), or
   `/4T-02/strata-work/build-exp/strata-dsv41` (the previous production binary) /

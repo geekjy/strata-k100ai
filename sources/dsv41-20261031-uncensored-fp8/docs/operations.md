@@ -35,7 +35,7 @@ own whole experts.
 | piece | path |
 |---|---|
 | engine | `/4T-02/strata-work/repro-build/build/strata-dsv41` (clean v0.2.9 reproduction; previous: `build-exp`) |
-| model pack | `/4T-02/dsv41-conv/pack4` (native MXFP4/FP8 config + index) over `/4T-02/dsv41-conv/DSV41-UNC-v3.gguf` (508 GB); **not** the quantized pack7 / v7-q4k |
+| model pack | `/4T-02/dsv41-conv/pack8` (IQ1_S experts, 106.2 GB at 1.56 bpw) over `/4T-02/dsv41-conv/DSV41-UNC-v3-iq1s.gguf` (325.8 GB); native dense/Engram, quantized experts only. Previous: native pack4 (v3, 508 GB) and quantized pack7 (IQ2/Q4_K, 350 GB) |
 | serve config | `/4T-02/strata-work/dsv41-serve-p7tp.json` |
 | start script | `/4T-02/strata-work/serve_pack7_tp.sh` (container `dsv41-serve`, port 8095; name is historical) |
 | fallback | `/4T-02/strata-work/serve_pack7.sh` (baseline engine, layer split, pack7) |
@@ -43,7 +43,7 @@ own whole experts.
 Effective engine line and environment:
 
 ```
-repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack4 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
+repro-build/build/strata-dsv41 --serve --pack /4T-02/dsv41-conv/pack8 --gpus 0,1 --tp 2 --dspark on --mmap-experts on
 DS4_EXPERT_TP=1  DS4_AR_RS2=1  DS4_ATTN_SPLIT=1  DS4_FAST_ATTN=1   # production experiment since 21:43
 ```
 
@@ -52,12 +52,15 @@ re-run the start script after removing the container.
 
 Production was switched on 2026-11-03 21:32 to the clean v0.2.9 reproduction build
 (`repro-build/build/strata-dsv41`), at 21:43 it was restarted with `DS4_FAST_ATTN=1` (MMAC path,
-explicit production experiment), and at 21:58 the model pack was switched from the quantized pack7
-(IQ2/Q4_K, v7-q4k) to the **native MXFP4 pack4** (v3, 508 GB). Config backups:
-`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218` (pre-clean-build) and
-`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-pack7-20261103-215758` (pack7). The pre-fast-attn start
-script is at `/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`. Restore the desired config
-and re-run the start script to roll back. Health and a small inference request were verified after each
+explicit production experiment), at 21:58 the model pack was switched from the quantized pack7
+(IQ2/Q4_K, v7-q4k) to the **native MXFP4 pack4** (v3, 508 GB), and at 23:57 to **pack8, the IQ1_S
+expert quant** (`DSV41-UNC-v3-iq1s.gguf`, 325.8 GB; experts 106.2 GB/1.56 bpw, all in VRAM; native
+dense/Engram). Config backups:
+`/4T-02/strata-work/dsv41-serve-p7tp.json.bak-20261103-213218` (pre-clean-build),
+`...bak-pack7-20261103-215758` (pack7), and `...bak-pack4-20261103-235735` (pack4). The pre-fast-attn
+start script is at `/4T-02/strata-work/serve_pack7_tp.sh.bak-20261103-214315`. Restore the desired
+config and re-run the start script to roll back. Health and a small inference request were verified
+after each
 change.
 
 ## 3. Day-to-day commands (on the host)
@@ -219,14 +222,16 @@ The expert-TP change is exported as a patch: `sources/dsv41-20261031-uncensored-
 
 | pack | dense | experts | gguf |
 |---|---|---|---|
-| **pack4** | **MXFP4 (native)** | **MXFP4** | `DSV41-UNC-v3.gguf`, 508.4 GB — **current production since 21:58** |
+| **pack8** | **native (BF16/MXFP4/MXFP8)** | **IQ1_S** (106.2 GB, 1.56 bpw) | `DSV41-UNC-v3-iq1s.gguf`, 325.8 GB — **current production since 23:57** |
+| pack4 | MXFP4 (native) | MXFP4 | `DSV41-UNC-v3.gguf`, 508.4 GB — previous native production |
 | pack5 | Q6_K | IQ2_XXS | `DSV41-UNC-v4-iq2.gguf`, 359.7 GB |
 | pack6 | Q6_K | IQ2_XXS | `DSV41-UNC-v5-q6k.gguf`, 352.0 GB |
-| pack7 | Q4_K | IQ2_XXS | `DSV41-UNC-v7-q4k.gguf`, 350.3 GB — previous production |
+| pack7 | Q4_K | IQ2_XXS | `DSV41-UNC-v7-q4k.gguf`, 350.3 GB — previous quantized production |
 
-Production switched to the native pack4 at 21:58 (non-requantized; ~318 GB RAM after load, noticeably
-slower than pack7). Switching packs is a config edit (`dsv41-serve-p7tp.json`), not a rebuild. The
-quantisation was ruled out as a crash cause by running pack4 and pack7 side by side.
+Production switched to pack8 at 23:57: IQ1_S experts (106.2 GB) fit entirely in the two cards' VRAM;
+native dense/Engram stay on CPU. Quality is below pack4; the fast-attn experiment remains on. Switching
+packs is a config edit (`dsv41-serve-p7tp.json`), not a rebuild. The quantisation was ruled out as a
+crash cause by running pack4 and pack7 side by side.
 
 ## 9. Known gaps
 

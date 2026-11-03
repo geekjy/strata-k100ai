@@ -1,5 +1,18 @@
 # 更新记录
 
+## 2026-11-03 生产切到 IQ1_S 专家量化（pack8，23:57）
+
+- 新增 IQ1_S 专家量化：`DSV41-UNC-v3-iq1s.gguf`，325.8 GB；专家 **106.2 GB / 1.56 bpw**，
+  120 个专家张量，量化耗时 66.6 min。`ds4_requant_gguf2.py` 增加 IQ1_S target，
+  `requant_gguf_tensor.cpp` 增加 IQ1_S 类型并重编 `requant_all`。
+- 用 `tools/dsv41/pack_gguf.py` 生成 `pack8`（4.1 MB：ds4/tensors/engram/tokenizer），
+  `expert-profile.bin`/`slots` 从 pack4 复制（路由与量化无关），DSpark noise_token 128799。
+- `dsv41-serve` 已切到 `--pack /4T-02/dsv41-conv/pack8`；`DS4_FAST_ATTN=1` 保持。health 200，
+  一次真实请求返回 OK；加载后约 **146 GB RAM**（全部专家进 VRAM）。
+- 质量低于原生 pack4；这是显存吃满/速度的取舍。回滚 pack4 配置：
+  `/4T-02/strata-work/dsv41-serve-p7tp.json.bak-pack4-20261103-235735`。
+- 量化产物较大：`DSV41-UNC-v3-iq1s.gguf` 325.8 GB + pack8 4.1 MB。
+
 ## 2026-11-03 生产切换到 clean v029 复现构建；21:43 开 DS4_FAST_ATTN=1；21:58 切到非量化 pack4
 
 - `dsv41-serve` 的 engine 从 `/4T-02/strata-work/build-exp/strata-dsv41` 切到
